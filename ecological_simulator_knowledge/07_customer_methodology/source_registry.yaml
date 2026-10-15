@@ -1,0 +1,78 @@
+id: METHOD-SOURCES
+title: Реестр предоставленного источника методики
+version: 1.1.0
+language: ru
+updated_at: '2026-10-12'
+status: source_received_relevant_sections_reviewed
+markdown_refs:
+- 07_customer_methodology/methodology_overview.md
+- 07_customer_methodology/book_source_card.md
+- 07_customer_methodology/book_case_boundary.md
+related_documents:
+  rules_of_judge: 03_judge/judge_rules.yaml
+  scenario_assumptions: 01_common_knowledge/scenario_assumptions.yaml
+  game_configuration: 04_game_rules/game_config.yaml
+  path_convention: Paths are relative to the package root.
+sources:
+- id: SRC-CUSTOMER-BOOK
+  title: 'Устойчивое развитие: системный подход'
+  document_type: учебное пособие
+  editor: Т. А. Орешкина
+  authors:
+  - Т. А. Орешкина
+  - А. Б. Соболев
+  - А. А. Селезнев
+  - Е. Ю. Бакланова
+  - И. Л. Прокофьев
+  - Е. А. Москвина
+  - И. В. Тополя
+  publisher: Издательство Уральского университета
+  city: Екатеринбург
+  year: 2026
+  isbn: 978-5-7996-4169-6
+  bibliographic_page_count: 220
+  pdf_page_count: 224
+  original_file: C:/Users/user/Downloads/978-5-7996-4169-6_2026.pdf
+  local_file: 07_customer_methodology/sources/978-5-7996-4169-6_2026.pdf
+  sha256: fa692f0ca88e970ed703075237191722e63d9af9ea6b60cc88f7db8ab4e0d076
+  size_bytes: 4666457
+  url: null
+  url_status: не предоставлен и не проверялся
+  copyright_holder: Уральский федеральный университет
+  rights:
+    local_analysis: Предоставлено пользователем для текущей работы
+    public_full_text_distribution: ТРЕБУЕТ СОГЛАСОВАНИЯ
+    rag_indexing: ТРЕБУЕТ СОГЛАСОВАНИЯ области использования
+  verification:
+    bibliography: checked_pdf_pages_3_4
+    full_file_text_extraction: true
+    review_scope: Тематический разбор §3.1 и §4.2, отдельный фрагмент §4.3
+    book_case_independent_verification: false
+    book_legal_claims_verified: false
+    adaptations_approved: false
+  printed_to_pdf_offset:
+    offset: 2
+    applies_to: проверенные нумерованные страницы основной части
+    universal: false
+  checked_at: '2026-10-12'
+  access_scope: architect
+page_reference_fields:
+- source_id
+- printed_page
+- pdf_page
+- pdf_page_index
+- section
+- table_id
+- extracted_text_hash
+source_card_fields:
+- id
+- title
+- authors
+- editor
+- publisher
+- year
+- isbn
+- local_file
+- sha256
+- rights
+- verification

@@ -1,0 +1,38 @@
+id: METHOD-HANDOVER-SOURCES
+title: Реестр происхождения дополнения по книге
+version: 1.1.0
+language: ru
+updated_at: '2026-10-12'
+status: source_received_relevant_sections_reviewed
+markdown_refs:
+- 07_customer_methodology/book_source_card.md
+- 09_handover/architect_handover.md
+source_registry_ref: 07_customer_methodology/source_registry.yaml
+sources:
+- id: SRC-CUSTOMER-BOOK
+  title: 'Устойчивое развитие: системный подход'
+  year: 2026
+  isbn: 978-5-7996-4169-6
+  local_file: 07_customer_methodology/sources/978-5-7996-4169-6_2026.pdf
+  sha256: fa692f0ca88e970ed703075237191722e63d9af9ea6b60cc88f7db8ab4e0d076
+  verification_status: relevant_pages_reviewed_case_not_independently_verified
+  access_scope: architect
+methodological_principle_ids:
+- BOOK-P-01
+- BOOK-P-02
+- BOOK-P-03
+- BOOK-P-04
+- BOOK-P-05
+- BOOK-P-06
+- BOOK-P-07
+- BOOK-P-08
+- BOOK-P-09
+- BOOK-P-10
+- BOOK-P-11
+- BOOK-P-12
+active_judge_rules_ref: 03_judge/judge_rules.yaml
+scenario_ref: 01_common_knowledge/scenario_assumptions.yaml
+old_package_present_at_start: false
+game_configuration_ref: 04_game_rules/game_config.yaml
+old_package_observation_context: Историческое наблюдение на начало подготовки книжного дополнения 2026-10-12; не
+  описывает текущую структуру папки.

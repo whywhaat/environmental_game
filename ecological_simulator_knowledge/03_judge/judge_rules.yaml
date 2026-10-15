@@ -1,0 +1,218 @@
+id: JUDGE-RULES
+title: Структурированные правила ИИ-судьи
+version: 1.0.0
+language: ru
+status: draft_complete
+updated_at: '2026-10-12'
+markdown_refs:
+- 03_judge/judge_instructions.md
+- 03_judge/authority_rules.md
+- 03_judge/resource_rules.md
+- 03_judge/evidence_rules.md
+- 03_judge/negotiation_rules.md
+- 03_judge/agreement_rules.md
+- 03_judge/ethical_rules.md
+- 03_judge/violation_examples.md
+judge_id: judge
+rules:
+- id: CITYN-J-001
+  name: Соответствие роли
+  description: Агент действует как переговорный представитель указанной роли, а не как несуществующий дополнительный
+    орган.
+  application_condition: Для любого действия, заявления о компетенции или подписи.
+  allowed_example: Жители города предлагают канал обращений.
+  violation_example: Жители города объявляют себя тарифным органом.
+  severity: major
+  judge_decision: request_correction
+  evidence_required:
+  - Профиль агента
+  - Текст действия
+  basis:
+    type: game_rule
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+- id: CITYN-J-002
+  name: Полномочия и чужие ресурсы
+  description: Обязательство подтверждает владелец ресурса в пределах документированного мандата.
+  application_condition: При обещании средств, распоряжении имуществом или действии от имени другой стороны.
+  allowed_example: Городская администрация просит холдинг подтвердить собственную долю.
+  violation_example: Городская администрация утверждает расход холдинга без его согласия.
+  severity: critical
+  judge_decision: reject_action
+  evidence_required:
+  - Мандат владельца
+  - Явное подтверждение обязательства
+  basis:
+    type: game_rule
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+- id: CITYN-J-003
+  name: Ресурсные ограничения
+  description: Расходы не превышают активный подтверждённый лимит; неизвестный лимит не равен нулю или бесконечности.
+  application_condition: При внесении и пересмотре финансового обязательства.
+  allowed_example: Холдинг подтверждает вклад 45 ИЕ при демонстрационном лимите 50 ИЕ.
+  violation_example: Одни и те же 20 ИЕ одновременно полностью оплачивают два разных этапа.
+  severity: critical
+  judge_decision: request_correction
+  evidence_required:
+  - Карточка ресурса
+  - Смета и журнал обязательств
+  basis:
+    type: game_rule
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+- id: CITYN-J-004
+  name: Достоверность утверждений
+  description: Различать факт сценария, утверждение источника, вывод, предложение и неизвестное.
+  application_condition: При фактическом, причинном или количественном утверждении.
+  allowed_example: 'НКО говорит: причинная доля аварии ещё не установлена.'
+  violation_example: Из факта загрязнения выводится установленная вина только одного участника.
+  severity: major
+  judge_decision: request_evidence
+  evidence_required:
+  - ID утверждения
+  - Источник и точное место
+  - Объяснение вывода
+  basis:
+    type: methodological_recommendation
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+- id: CITYN-J-005
+  name: Подтверждение источником
+  description: Источник должен существовать, поддерживать утверждение и иметь применимую дату, версию и происхождение.
+  application_condition: При ссылке на закон, кейс, измерение или методику заказчика.
+  allowed_example: Старый акт отмечен как исторический и не используется для действующего требования.
+  violation_example: Выдуманная страница предоставленной книги объявлена основанием запрета.
+  severity: major
+  judge_decision: request_evidence
+  evidence_required:
+  - Источник
+  - Раздел или страница
+  - Статус проверки и редакция
+  basis:
+    type: methodological_recommendation
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+- id: CITYN-J-006
+  name: Порядок переговоров
+  description: Один ход принадлежит одному участнику; возражение связано с предложением; версии не меняются скрытно.
+  application_condition: В раунде 2 при подаче сообщения и фиксации компромисса.
+  allowed_example: Контрпредложение P-03 ссылается на P-02 и показывает изменение срока.
+  violation_example: Участник редактирует ранее подтверждённую долю без уведомления.
+  severity: major
+  judge_decision: request_correction
+  evidence_required:
+  - Журнал ходов
+  - Версии предложений
+  basis:
+    type: game_rule
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+- id: CITYN-J-007
+  name: Полнота итогового соглашения
+  description: Протокол содержит объект, меры защиты, этапы, владельцев обязательств, ресурсы, сроки, контроль,
+    условия и статус.
+  application_condition: Перед каждым голосованием по новой версии.
+  allowed_example: Неподтверждённая поддержка отражена в намерениях с условием и резервным вариантом.
+  violation_example: Протокол обещает реконструкцию без исполнителя, срока и источника средств.
+  severity: critical
+  judge_decision: block_agreement
+  evidence_required:
+  - Текущая версия протокола
+  - Подтверждения сторон
+  - Смета
+  basis:
+    type: game_rule
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+- id: CITYN-J-008
+  name: Этические ограничения
+  description: Запрещены фальсификация, угрозы, сознательное сокрытие существенных рисков и неправомерное раскрытие
+    персональных данных.
+  application_condition: Для любого сообщения, доказательства или условия сделки.
+  allowed_example: Публикуются обезличенные обращения и проверенные результаты.
+  violation_example: Холдинг предлагает скрыть неудобные результаты за дополнительный взнос.
+  severity: critical
+  judge_decision: reject_action
+  evidence_required:
+  - Сообщение
+  - Обоснование существенности риска
+  - Основание раскрытия данных
+  basis:
+    type: game_rule
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+- id: CITYN-J-009
+  name: Непротиворечивость обязательств
+  description: Доли, суммы, сроки, зависимости и исполнители согласованы между всеми пунктами.
+  application_condition: При изменении условий и проверке итоговой версии.
+  allowed_example: Сумма вкладов 20+45+35 покрывает 100 ИЕ включая резерв.
+  violation_example: В одном пункте регион платит 35, в другом 40; оба считаются окончательными.
+  severity: critical
+  judge_decision: block_agreement
+  evidence_required:
+  - Все пункты версии
+  - Ресурсный баланс
+  - График зависимостей
+  basis:
+    type: game_rule
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+- id: CITYN-J-010
+  name: Игровые процедуры и голосование
+  description: Голосуют ровно пять агентов по одной допущенной версии; судья не голосует; 3/5 не заменяет право.
+  application_condition: При завершении раунда, фиксации голосов и повторном рассмотрении.
+  allowed_example: Три голоса за принятую учебную версию, все владельцы её ресурсов подтвердили свои обязательства.
+  violation_example: ИИ-судья добавляет шестой голос или большинство назначает вклад несогласного холдинга.
+  severity: critical
+  judge_decision: block_agreement
+  evidence_required:
+  - Реестр пяти голосов
+  - Версия и допуск
+  - Активная конфигурация
+  basis:
+    type: game_rule
+    source_id: SRC-REQUEST
+    note: Проект регламента; не самостоятельная норма законодательства
+  markdown_ref: 03_judge/judge_instructions.md
+severity_policy:
+  critical: Блокировать зависимый протокол до исправления
+  major: Запросить исправление; блокировать допуск при материальном влиянии
+decisions:
+- pass
+- request_evidence
+- request_correction
+- reject_action
+- block_agreement
+legal_policy:
+  confirmed_current_legal_rules: []
+  activate_only_after_legal_review: true
+verdict_fields:
+- verdict_id
+- actor_id
+- round_id
+- turn_id
+- agreement_id
+- version
+- rule_ids
+- finding
+- evidence_refs
+- severity
+- decision
+- correction_required
+- admission_status
+- public_reason
+- restricted_note
+activation:
+  approved: false
+  status: ТРЕБУЕТ СОГЛАСОВАНИЯ
+  requires: Согласовать вместе с game_config.yaml; описанный регламент не означает, что программный судья реализован.

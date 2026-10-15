@@ -1,0 +1,66 @@
+id: SCENARIO-ASSUMPTIONS
+title: Факты, допущения и пробелы
+version: 1.0.0
+language: ru
+status: draft_complete
+updated_at: '2026-10-12'
+markdown_refs:
+- 01_common_knowledge/city_description.md
+- 01_common_knowledge/environmental_situation.md
+- 01_common_knowledge/industrial_accident.md
+- 01_common_knowledge/treatment_facilities.md
+- 01_common_knowledge/stakeholders.md
+- 01_common_knowledge/conflict_description.md
+- 01_common_knowledge/glossary.md
+scenario_id: city_n_ecological_negotiation
+facts:
+- id: FACT-01
+  statement: Город N — промышленный моногород
+  source_id: SRC-REQUEST
+- id: FACT-02
+  statement: Река загрязнена
+  source_id: SRC-REQUEST
+- id: FACT-03
+  statement: На предприятии Промышленного холдинга произошла технологическая авария
+  source_id: SRC-REQUEST
+- id: FACT-04
+  statement: Муниципальные очистные сооружения нуждаются в реконструкции
+  source_id: SRC-REQUEST
+- id: FACT-05
+  statement: Есть экологические, финансовые и социальные конфликты
+  source_id: SRC-REQUEST
+proposed_parameters:
+- id: ASSUMPTION-VOTE
+  value: 3
+  unit: голоса за из пяти
+  status: ТРЕБУЕТ СОГЛАСОВАНИЯ
+- id: ASSUMPTION-LIMIT
+  value: 30
+  unit: ходы только раунда 2
+  status: ТРЕБУЕТ СОГЛАСОВАНИЯ
+- id: ASSUMPTION-REVIEW
+  value: 1
+  unit: повторное рассмотрение внутри оставшегося лимита
+  status: ТРЕБУЕТ СОГЛАСОВАНИЯ
+unknowns:
+- Регион РФ и применимая редакция законодательства
+- Причины аварии и связь источников с загрязнением
+- Состав загрязнений и лабораторные показатели
+- Собственник, оператор и права на объекты
+- Смета, бюджетные лимиты и мандаты
+- Обязательность методики заказчика и права на распространение/индексацию предоставленной книги
+demo_resources:
+  status: только демонстрации; ТРЕБУЕТ СОГЛАСОВАНИЯ для запуска
+  unit: ИЕ
+  project_cost: 100
+  caps:
+    city_administration: 20
+    industrial_holding: 50
+    regional_government: 40
+    city_residents: 0
+    environmental_ngo: 0
+  allocation:
+    city_administration: 20
+    industrial_holding: 45
+    regional_government: 35
+  note: 100 ИЕ включает 10 ИЕ резерва. Юридический ущерб и аварийные меры в эту учебную смету не включены.
