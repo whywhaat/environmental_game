@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: langflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: langflow
+      POSTGRES_USER: langflow
+      POSTGRES_PASSWORD: change_me_strong_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langflow -d langflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langflow:
+    image: langflowai/langflow:latest
+    container_name: langflow
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "7860:7860"
+    environment:
+      LANGFLOW_DATABASE_URL: postgresql://langflow:change_me_strong_password@postgres:5432/langflow
+      LANGFLOW_CONFIG_DIR: /app/langflow
+      LANGFLOW_SUPERUSER: admin
+      LANGFLOW_SUPERUSER_PASSWORD: change_me_langflow_password
+      LANGFLOW_RESTRICT_LOCAL_FILE_ACCESS: "false"
+      LANGFLOW_SSRF_ALLOWED_HOSTS: "host.docker.internal"
+      OPENAI_COMPATIBLE_API_KEY: "localai"
+      LANGFLOW_COMPONENTS_PATH: /app/custom_components
+      LANGFLOW_WORKER_TIMEOUT: 600
+      LANGFLOW_WORKFLOW_EXECUTION_TIMEOUT: 3600
+    volumes:
+      - langflow_data:/app/langflow
+      - ./custom_components:/app/custom_components
+
+volumes:
+  postgres_data:
+  langflow_data:
