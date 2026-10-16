@@ -10,6 +10,7 @@ from lfx.field_typing.range_spec import RangeSpec
 from lfx.inputs.inputs import StrInput
 from lfx.io import FloatInput, ModelInput, MultilineInput, Output, SecretStrInput, SliderInput
 from lfx.schema.data import Data
+from config.prompts import read_prompt
 
 
 class PlayerAgent(LCModelComponent):
@@ -61,7 +62,7 @@ class PlayerAgent(LCModelComponent):
             name="prompt",
             display_name="Prompt",
             info="System prompt/personality for this player.",
-            value="You are a strategic negotiator.",
+            value=read_prompt("player_default"),
             required=True,
         ),
         FloatInput(
