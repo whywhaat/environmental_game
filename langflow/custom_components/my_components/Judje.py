@@ -5,6 +5,7 @@ from lfx.schema.message import Message
 from langchain_core.messages import HumanMessage
 from lfx.base.models.unified_models import get_llm
 import json
+from config.prompts import read_prompt, render_prompt
 
 
 def _extract_text(content) -> str:
@@ -73,25 +74,11 @@ class ContractJudge(Component):
         instruction = str(getattr(self, "instruction", "") or "").strip()
 
         if not instruction:
-            instruction = (
-                "Ты — беспристрастный и опытный судья переговорного процесса.\n\n"
-                "Внимательно изучи скрытые профили игроков, их реальные бюджеты и полную историю переговоров.\n\n"
-                "Проведи детальный аналитический разбор на русском языке по критериям:\n"
-                "- стратегическое поведение и качество переговоров\n"
-                "- соответствие скрытым интересам и бюджетам\n"
-                "- использование команд SET, SPEAK, PASS и REJECT\n"
-                "- утечки информации, блеф и уступки\n"
-                "- сила итоговых позиций сторон\n\n"
-                "Пиши разбор исключительно на русском языке."
-            )
+            instruction = read_prompt("postgame_judge_instruction")
 
-        prompt = (
-            f"{instruction}\n\n"
-            "ПРОФИЛИ УЧАСТНИКОВ (СКРЫТЫЕ ДАННЫЕ):\n"
-            f"{json.dumps(profiles, ensure_ascii=False, indent=2)}\n\n"
-            "ПОЛНАЯ ИСТОРИЯ ХОДОВ ПЕРЕГОВОРОВ:\n"
-            f"{json.dumps(history, ensure_ascii=False, indent=2)}"
-        )
+        prompt = render_prompt("postgame_judge", instruction=instruction,
+                               profiles=json.dumps(profiles, ensure_ascii=False, indent=2),
+                               history=json.dumps(history, ensure_ascii=False, indent=2))
 
         try:
             llm = get_llm(model=self.model, user_id=self.user_id)
