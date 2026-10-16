@@ -5,6 +5,7 @@ from lfx.schema.message import Message
 from langchain_core.messages import HumanMessage
 from lfx.base.models.unified_models import get_llm
 import json
+from config.prompts import read_prompt, render_prompt
 
 
 def _extract_text(content) -> str:
@@ -77,18 +78,10 @@ class ContractPredict(Component):
         instruction = str(getattr(self, "instruction", "") or "").strip()
 
         if not instruction:
-            instruction = (
-                "Ты — ведущий инвестиционный и проектный аналитик-прогнозист.\n\n"
-                "Проанализируй текущее итоговое состояние проекта и составь подробный прогноз его будущего на русском языке.\n\n"
-                "Оцени: взносы, распределение долей, баланс стимулов, инвестиционную привлекательность и устойчивость проекта.\n"
-                "Пиши исключительно на русском языке."
-            )
+            instruction = read_prompt("prediction_instruction")
 
-        prompt = (
-            f"{instruction}\n\n"
-            "ФИНАЛЬНОЕ СОСТОЯНИЕ ПРОЕКТА (ВЗНОСЫ И ДОЛИ):\n"
-            f"{json.dumps(state, ensure_ascii=False, indent=2)}"
-        )
+        prompt = render_prompt("prediction", instruction=instruction,
+                               state=json.dumps(state, ensure_ascii=False, indent=2))
 
         try:
             llm = get_llm(model=self.model, user_id=self.user_id)
