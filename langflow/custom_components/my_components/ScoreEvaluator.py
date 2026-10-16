@@ -5,6 +5,7 @@ from lfx.schema.data import Data
 from langchain_core.messages import HumanMessage
 from lfx.base.models.unified_models import get_llm
 import re
+from config.prompts import read_prompt, render_prompt
 
 
 def _extract_text(content) -> str:
@@ -84,22 +85,11 @@ class ContractScore(Component):
         instruction = str(getattr(self, "instruction", "") or "").strip()
 
         if not instruction:
-            instruction = (
-                "Ты — итоговый модуль скоринга и оценки эффективности переговоров.\n\n"
-                "На основе анализа судьи и прогноза проекта выставь каждому участнику оценку от 0 до 100 баллов.\n"
-                "Формат ответа:\n"
-                "SET <ИМЯ_ИГРОКА> SCORE <0-100>\n"
-                "SET <ИМЯ_ИГРОКА> SCORE <0-100>\n"
-                "...\n"
-                "FUTURE OF PROJECT: <Резюме на русском языке о будущем проекта>"
-            )
+            instruction = read_prompt("score_instruction")
 
-        prompt = (
-            f"{instruction}\n\n"
-            f"СПИСОК ИГРОКОВ (используй точные имена):\n{', '.join(player_names)}\n\n"
-            f"ВЫВОДЫ СУДЬИ:\n{self.judge_result}\n\n"
-            f"ПРОГНОЗ ПРОЕКТА:\n{self.prediction}"
-        )
+        prompt = render_prompt("score", instruction=instruction,
+                               player_names=", ".join(player_names),
+                               judge_result=self.judge_result, prediction=self.prediction)
 
         try:
             llm = get_llm(model=self.model, user_id=self.user_id)
