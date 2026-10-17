@@ -66,6 +66,7 @@ dialog_namespace = {
     "Data": Data,
     "BoolInput": fake_input,
     "DataInput": fake_input,
+    "IntInput": fake_input,
     "MultilineInput": fake_input,
     "Output": fake_input,
     "SystemMessage": SimpleNamespace,
