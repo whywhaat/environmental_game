@@ -49,9 +49,11 @@ judge_namespace = {
     "read_prompt": read_prompt,
     "render_prompt": render_prompt,
 }
-MeetingJudgeService = load_class(
-    ROOT / "langflow/custom_components/my_components/MeetingJudge.py",
-    "MeetingJudgeService", judge_namespace,
+judge_file = ROOT / "langflow/custom_components/my_components/MeetingJudge.py"
+MeetingJudgeService = (
+    load_class(judge_file, "MeetingJudgeService", judge_namespace)
+    if judge_file.exists()
+    else None
 )
 
 dialog_source = ROOT / "langflow/custom_components/my_components/dialog.py"
