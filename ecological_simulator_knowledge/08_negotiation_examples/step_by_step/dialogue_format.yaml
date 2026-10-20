@@ -1,0 +1,129 @@
+id: DEMO-STEP-FORMAT
+title: Демонстрационный контракт публичного сообщения
+version: 1.0.0
+language: ru
+status: proposed_not_activated
+access_scope: architect
+updated_at: '2026-10-20'
+scope: Только документация; не схема API приложения и не настройка RAG
+financial_notation:
+  currency: RUB
+  resource_card_unit: руб.
+  public_speech_unit: млн руб.
+  rubles_per_public_unit: 1000000
+  demonstration_project_cost_rub: 1000000000
+  demonstration_caps_rub:
+    city_administration: 200000000
+    industrial_holding: 500000000
+    regional_government: 400000000
+    city_residents: 0
+    environmental_ngo: 0
+  real_budgets_confirmed: false
+participants:
+  - city_administration
+  - industrial_holding
+  - regional_government
+  - city_residents
+  - environmental_ngo
+service_ids:
+  - orchestrator
+  - judge
+required_fields:
+  round:
+    type: integer
+    enum: [2, 3]
+    description: Фаза исходного регламента; round=3 также используется для доставки голосов
+  turn_number:
+    type: integer
+    minimum: 1
+    description: Непрерывный номер публичного сообщения в пределах сценария; не счётчик лимита
+  speaker:
+    type: string
+    enum_ref: participants
+  action_type:
+    type: string
+    enum: [propose, object, counterpropose, request_evidence, clarify, confirm_own_commitment, correct, vote, decline_reconsideration]
+    description: Основное действие реплики; это аналитические метки, не новая активация permissions
+  position:
+    type: string
+    min_length: 1
+    description: Первый абзац цитаты, позиция по предмету
+  argument:
+    type: string
+    min_length: 1
+    description: Второй абзац, основание позиции и ограничение
+  reaction_to_previous:
+    type: string
+    min_length: 1
+    description: Третий абзац, ссылка на ранее опубликованный ход, карточки или повестку
+  proposal:
+    type: string
+    min_length: 1
+    description: Четвёртый абзац, конкретное предложение, возражение, исправление или голос
+  next_speaker:
+    type: string
+    enum: [industrial_holding, regional_government, city_residents, environmental_ngo, orchestrator]
+  public_speech:
+    type: string
+    description: Пять абзацев цитаты соединены одним пробелом, без кавычек оформления
+  source_refs:
+    type: array
+    min_items: 1
+    item_type: string
+    description: Пути относительно этого YAML/JSON; локальные разделы указываются после решётки
+constraints:
+  first_speaker: city_administration
+  sequence: [city_administration, industrial_holding, regional_government, city_residents, environmental_ngo]
+  after_environmental_ngo: orchestrator
+  agent_cannot_change_sequence: true
+  public_speech_composition: position + space + argument + space + reaction_to_previous + space + proposal + space + handoff
+  handoff_source: Пятый абзац цитаты; точный текст в handoff_phrases
+  only_round_2_counts_against_limit: true
+  round_2_proposed_limit: 30
+  limit_activation: Требует отдельного утверждения; библиотека не меняет game_config.yaml
+  votes_hidden_until_all_five_received: true
+  silence_is_confirmation: false
+  proposal_is_commitment: false
+  conditional_money_is_available_money: false
+handoff_phrases:
+  city_administration: Передаю слово промышленному холдингу.
+  industrial_holding: Передаю слово региональному правительству.
+  regional_government: Передаю слово жителям города.
+  city_residents: Передаю слово экологической НКО.
+  environmental_ngo: Передаю управление оркестратору.
+json_container:
+  file: message_examples.json
+  description: Все публичные ходы десяти сценариев; точное соответствие цитатам Markdown
+  fields:
+    format_id: DEMO-STEP-FORMAT
+    version: 1.0.0
+    language: ru
+    access_scope: architect
+    synthetic: true
+    example_status: demonstration_proposal
+    game_victory: not_established
+    decision_refs: DEC-03, DEC-06, DEC-10
+    financial_notation: Валюта RUB; public_speech_unit — млн руб., resource_card_unit — руб.; demonstration_project_cost_rub — 1000000000
+    scenarios: Массив объектов scenario_id, document, expected_outcome, initial_round_2_turns, shown_round_2_turns, example_status, game_victory, messages
+  scenario_counters:
+    initial_round_2_turns: Переговорные ходы исходного журнала до показанного фрагмента
+    shown_round_2_turns: Число показанных сообщений round=2; не включает сверку и голоса
+    total_round_2_turns: initial_round_2_turns + shown_round_2_turns
+negative_examples:
+  - scenario_id: DEMO-STEP-07
+    turn_number: 1
+    expected_judge_decision: reject_action
+    reason: Чужое неподтверждённое финансовое обязательство
+  - scenario_id: DEMO-STEP-08
+    turn_number: 4
+    expected_judge_decision: request_evidence
+    reason: Неподтверждённое сообщение ошибочно объявлено результатом измерения
+separate_channels:
+  public: Только сообщения пяти участников
+  orchestrator: Слот, очередь, версия, счётчик, начало цикла, сбор и раскрытие голосов
+  judge: Вердикт по judge_rules.yaml; не публичная позиция шестого агента
+references:
+  - ../../04_game_rules/game_config.yaml
+  - ../../03_judge/judge_rules.yaml
+  - turn_taking_rules.md
+  - README.md

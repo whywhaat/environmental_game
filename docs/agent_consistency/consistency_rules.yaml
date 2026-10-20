@@ -1,0 +1,734 @@
+{
+  "id": "CONSISTENCY-RULES",
+  "version": "1.1.0",
+  "language": "ru",
+  "access_scope": "architect",
+  "status": "proposed_not_activated",
+  "updated_at": "2026-10-20",
+  "format_note": "Документ YAML 1.2 записан в JSON-совместимом подмножестве для однозначного машинного чтения без дополнительных зависимостей.",
+  "activation": {
+    "approved": false,
+    "changes_existing_rules": false,
+    "note": "Реестр аналитических проверок; не активирует GAME-CONFIG, CITYN-J или METHOD-CHECK. Новые уточнения требуют отдельного согласования."
+  },
+  "agent_ids": [
+    "city_administration",
+    "industrial_holding",
+    "regional_government",
+    "city_residents",
+    "environmental_ngo"
+  ],
+  "service_ids": [
+    "orchestrator",
+    "judge"
+  ],
+  "conflict_categories": [
+    "AUTHORITY_CONFLICT",
+    "RESOURCE_CONFLICT",
+    "POSITION_CONFLICT",
+    "COMMITMENT_CONFLICT",
+    "FACTUAL_CONFLICT",
+    "PROTOCOL_CONFLICT",
+    "TURN_CONFLICT",
+    "TEMPORAL_CONFLICT"
+  ],
+  "position_change_reasons": [
+    "new_verified_information",
+    "reciprocal_concession",
+    "authorized_scenario_update",
+    "previous_proposal_rejected",
+    "alternative_goal_path"
+  ],
+  "judge_decisions": [
+    "pass",
+    "request_evidence",
+    "request_correction",
+    "reject_action",
+    "block_agreement"
+  ],
+  "dispute_status": "unresolved_dispute",
+  "currency": "RUB",
+  "amount_storage": "Целые рубли; млн руб. в публичной речи явно обозначаются и переводятся в рубли до сравнения.",
+  "sources": [
+    {
+      "id": "S-REQUEST",
+      "path": "README.md",
+      "locator": "Раздел Источники и ссылки правил; последнее задание пользователя",
+      "kind": "user_requested_analytic_extension"
+    },
+    {
+      "id": "S-SCENARIO",
+      "path": "../../ecological_simulator_knowledge/01_common_knowledge/scenario_assumptions.yaml",
+      "locator": "FACT-01–05, unknowns, demo_resources",
+      "kind": "scenario_and_demonstration"
+    },
+    {
+      "id": "S-GAME",
+      "path": "../../ecological_simulator_knowledge/04_game_rules/game_config.yaml",
+      "locator": "activation, turn_policy, voting, reconsideration",
+      "kind": "proposed_game_rule"
+    },
+    {
+      "id": "S-JUDGE",
+      "path": "../../ecological_simulator_knowledge/03_judge/judge_rules.yaml",
+      "locator": "CITYN-J-001–010, decisions, severity_policy, legal_policy",
+      "kind": "proposed_game_rule"
+    },
+    {
+      "id": "S-NEGOTIATION",
+      "path": "../../ecological_simulator_knowledge/04_game_rules/negotiation_mechanics.md",
+      "locator": "Предложение, возражение, контрпредложение и лимит",
+      "kind": "proposed_game_rule"
+    },
+    {
+      "id": "S-PROTOCOL",
+      "path": "../../ecological_simulator_knowledge/03_judge/agreement_rules.md",
+      "locator": "Допуск итогового протокола",
+      "kind": "proposed_game_rule"
+    },
+    {
+      "id": "S-VOTE",
+      "path": "../../ecological_simulator_knowledge/04_game_rules/voting_mechanics.md",
+      "locator": "Допуск, подсчёт, повторное рассмотрение",
+      "kind": "proposed_game_rule"
+    },
+    {
+      "id": "S-EVIDENCE",
+      "path": "../../ecological_simulator_knowledge/03_judge/evidence_rules.md",
+      "locator": "Проверка фактов и источников",
+      "kind": "methodological_recommendation"
+    },
+    {
+      "id": "S-RESOURCE",
+      "path": "../../ecological_simulator_knowledge/03_judge/resource_rules.md",
+      "locator": "Баланс, лимиты и условные источники",
+      "kind": "proposed_game_rule"
+    },
+    {
+      "id": "S-ETHICS",
+      "path": "../../ecological_simulator_knowledge/03_judge/ethical_rules.md",
+      "locator": "Фальсификация, риск и данные",
+      "kind": "game_and_methodological_constraints"
+    },
+    {
+      "id": "S-PROFILES",
+      "path": "agent_state_specification.md",
+      "locator": "Пять профилей и ссылки на все паспорта и YAML-конфигурации",
+      "kind": "profile_cross_reference"
+    },
+    {
+      "id": "S-DIALOGUES",
+      "path": "../../ecological_simulator_knowledge/08_negotiation_examples/step_by_step/README.md",
+      "locator": "Каталог десяти сценариев и общие демонстрационные условия",
+      "kind": "synthetic_demonstration"
+    },
+    {
+      "id": "S-BOOK",
+      "path": "../../ecological_simulator_knowledge/07_customer_methodology/extracted_principles.md",
+      "locator": "BOOK-P-03/04/06/07/08/09 с координатами страниц",
+      "kind": "supporting_methodological_context_not_activated"
+    }
+  ],
+  "rules": [
+    {
+      "id": "CONS-AUTH-01",
+      "name": "Владелец обязательства и мандат",
+      "categories": [
+        "AUTHORITY_CONFLICT"
+      ],
+      "basis": "Детализация исходного игрового ограничения",
+      "source_refs": [
+        "S-JUDGE",
+        "S-PROFILES"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-001",
+        "CITYN-J-002"
+      ],
+      "detect_when": [
+        "Подтверждается чужой расход без согласия владельца",
+        "Действие выходит за подтверждённый мандат"
+      ],
+      "not_a_violation_when": [
+        "Явный запрос владельцу без фиксации чужого обязательства",
+        "Доказана разрешённая новая версия мандата с моментом действия"
+      ],
+      "required_evidence": [
+        "Автор и версия условия",
+        "Мандат",
+        "Подтверждение каждого владельца"
+      ],
+      "severity": "critical",
+      "default_decision": "reject_action",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Не применять присвоенное обязательство; зависимый протокол не допускать",
+      "tests": [
+        "CONS-T04",
+        "CONS-T10",
+        "CONS-T16",
+        "CONS-T20"
+      ],
+      "classification": "requires_decision",
+      "source_support": "direct",
+      "decision_refs": [
+        "DEC-01"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-RES-01",
+      "name": "Лимит и единый финансовый баланс",
+      "categories": [
+        "RESOURCE_CONFLICT"
+      ],
+      "basis": "Детализация исходного игрового ограничения",
+      "source_refs": [
+        "S-JUDGE",
+        "S-RESOURCE",
+        "S-SCENARIO"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-003",
+        "CITYN-J-009"
+      ],
+      "detect_when": [
+        "Сумма совместимых собственных нагрузок превышает лимит",
+        "Один ресурс посчитан дважды",
+        "Условный источник назван подтверждённым покрытием"
+      ],
+      "not_a_violation_when": [
+        "Доказано взаимоисключение целых альтернативных планов",
+        "Запрошено изменение лимита без обещания расхода до разрешения"
+      ],
+      "required_evidence": [
+        "Ресурсная карточка и единица",
+        "Ветка плана",
+        "Все нагрузки и предикаты",
+        "Стоимость той же версии"
+      ],
+      "severity": "critical",
+      "default_decision": "request_correction",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Не засчитывать невозможный или неподтверждённый ресурс; блокировать зависимый обеспеченный план",
+      "tests": [
+        "CONS-T03",
+        "CONS-T13",
+        "CONS-T14",
+        "CONS-T19"
+      ],
+      "classification": "requires_decision",
+      "source_support": "direct_with_proposed_accounting_details",
+      "decision_refs": [
+        "DEC-01",
+        "DEC-07"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-POS-01",
+      "name": "Объяснимость существенного изменения позиции",
+      "categories": [
+        "POSITION_CONFLICT"
+      ],
+      "basis": "Новое аналитическое уточнение по заданию; связь с CITYN-J не активирует его автоматически",
+      "source_refs": [
+        "S-REQUEST",
+        "S-NEGOTIATION",
+        "S-PROFILES",
+        "S-BOOK"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-006"
+      ],
+      "detect_when": [
+        "Меняется позиция по тому же предмету без прежней версии, причины или проверяемого обстоятельства"
+      ],
+      "not_a_violation_when": [
+        "Есть допустимое основание, полномочия и ресурс",
+        "Различаются предметы или этапы, а не одна позиция"
+      ],
+      "required_evidence": [
+        "Предыдущая и новая позиция",
+        "reason_code",
+        "trigger_refs",
+        "Проверки мандата, лимита и принятых условий"
+      ],
+      "severity": "major",
+      "default_decision": "request_correction",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Запросить объяснение; не запрещать допустимый компромисс и не перезаписывать валидированную позицию до проверки",
+      "tests": [
+        "CONS-T01",
+        "CONS-T02",
+        "CONS-T11",
+        "CONS-T12",
+        "CONS-T15"
+      ],
+      "classification": "proposed",
+      "source_support": "new_detail_requested_by_user",
+      "decision_refs": [
+        "DEC-09"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-COM-01",
+      "name": "Сохранение принятых условий при пересмотре",
+      "categories": [
+        "COMMITMENT_CONFLICT"
+      ],
+      "basis": "Детализация версий и подтверждений исходного регламента",
+      "source_refs": [
+        "S-NEGOTIATION",
+        "S-PROTOCOL",
+        "S-VOTE",
+        "S-REQUEST"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-002",
+        "CITYN-J-006",
+        "CITYN-J-009"
+      ],
+      "detect_when": [
+        "Принятое условие заменено новой репликой без допустимого пересмотра и согласий"
+      ],
+      "not_a_violation_when": [
+        "Отозвано ещё не принятое собственное предложение",
+        "Уточнение не меняет материального смысла",
+        "Новая версия принята по процедуре"
+      ],
+      "required_evidence": [
+        "condition_id/version",
+        "История согласий",
+        "Новая версия и затронутые владельцы"
+      ],
+      "severity": "critical",
+      "default_decision": "request_correction",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Для неутверждённых проектов сохранить историю; зависимый допуск закрыть до исправления. Для ratified только записать вопрос, без нового перехода до DEC-04.",
+      "tests": [
+        "CONS-T05",
+        "CONS-T06",
+        "CONS-T18"
+      ],
+      "classification": "requires_decision",
+      "source_support": "direct_for_drafts_only",
+      "decision_refs": [
+        "DEC-01",
+        "DEC-04",
+        "DEC-05"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-FACT-01",
+      "name": "Сопоставимые факты и проверяемые источники",
+      "categories": [
+        "FACTUAL_CONFLICT"
+      ],
+      "basis": "Детализация существующей проверки доказательств",
+      "source_refs": [
+        "S-EVIDENCE",
+        "S-SCENARIO",
+        "S-JUDGE",
+        "S-BOOK"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-004",
+        "CITYN-J-005"
+      ],
+      "detect_when": [
+        "Несовместимые утверждения относятся к одному сопоставимому объекту и наблюдению",
+        "Вывод противоречит установленному факту сценария"
+      ],
+      "not_a_violation_when": [
+        "Различие объясняют время, место, показатель, единица, метод или неопределённость",
+        "Новый проверенный источник обосновывает явную коррекцию"
+      ],
+      "required_evidence": [
+        "claim_id",
+        "Источник и место",
+        "Время и метод",
+        "Границы вывода"
+      ],
+      "severity": "major",
+      "default_decision": "request_evidence",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Сохранить обе версии; unresolved_dispute до проверки; при материальном влиянии закрыть зависимый допуск",
+      "tests": [
+        "CONS-T07",
+        "CONS-T11",
+        "CONS-T19"
+      ],
+      "classification": "requires_decision",
+      "source_support": "direct_with_proposed_comparison_details",
+      "decision_refs": [
+        "DEC-01",
+        "DEC-08"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-PROTO-01",
+      "name": "Протокол соответствует согласованным версиям",
+      "categories": [
+        "PROTOCOL_CONFLICT"
+      ],
+      "basis": "Детализация исходной структуры и допуска",
+      "source_refs": [
+        "S-PROTOCOL",
+        "S-JUDGE",
+        "S-VOTE"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-007",
+        "CITYN-J-009",
+        "CITYN-J-010"
+      ],
+      "detect_when": [
+        "Пункт добавлен, удалён или материально изменён без согласованного основания",
+        "Условное намерение представлено обеспеченным исполнением"
+      ],
+      "not_a_violation_when": [
+        "Открытый вопрос явно отделён и не создаёт обещания",
+        "Смысл сохранён при проверенном редакционном уточнении"
+      ],
+      "required_evidence": [
+        "agreement_id/version",
+        "Трассировка каждого пункта",
+        "Полнота и подтверждения всех затронутых владельцев"
+      ],
+      "severity": "critical",
+      "default_decision": "block_agreement",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Не допускать дефектную версию; новая материальная версия требует процедуры и новых подтверждений",
+      "tests": [
+        "CONS-T08",
+        "CONS-T10",
+        "CONS-T16",
+        "CONS-T18",
+        "CONS-T20"
+      ],
+      "classification": "requires_decision",
+      "source_support": "direct",
+      "decision_refs": [
+        "DEC-01",
+        "DEC-03",
+        "DEC-06"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-TURN-01",
+      "name": "Выделенный слот и неизменный счётчик",
+      "categories": [
+        "TURN_CONFLICT"
+      ],
+      "basis": "Исходная очередь и детализация передачи из библиотеки диалогов",
+      "source_refs": [
+        "S-GAME",
+        "S-NEGOTIATION",
+        "S-DIALOGUES"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-006",
+        "CITYN-J-010"
+      ],
+      "detect_when": [
+        "Автор не владеет слотом",
+        "Назван неверный следующий участник",
+        "Счётчик скрыто сброшен"
+      ],
+      "not_a_violation_when": [
+        "Служебный вердикт не изображается ходом агента",
+        "Доставлен технический дубль с тем же неизменным event_id"
+      ],
+      "required_evidence": [
+        "slot_id",
+        "Активная очередь",
+        "event_id",
+        "Счётчик раунда 2"
+      ],
+      "severity": "major",
+      "default_decision": "request_correction",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Оркестратор сохраняет правильный маршрут; исправление участника не получает бесплатный новый слот",
+      "tests": [
+        "CONS-T09",
+        "CONS-T17"
+      ],
+      "classification": "requires_decision",
+      "source_support": "direct_with_demo_handoff_detail",
+      "decision_refs": [
+        "DEC-01"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-TIME-01",
+      "name": "Совместимость сроков и предшественников",
+      "categories": [
+        "TEMPORAL_CONFLICT"
+      ],
+      "basis": "Детализация полноты плана и методический контекст",
+      "source_refs": [
+        "S-PROTOCOL",
+        "S-JUDGE",
+        "S-BOOK"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-007",
+        "CITYN-J-009"
+      ],
+      "detect_when": [
+        "Действие завершено раньше обязательного предшественника",
+        "График цикличен без точки запуска",
+        "Несовместима дата доступности ресурса"
+      ],
+      "not_a_violation_when": [
+        "Доказана независимая параллельность",
+        "Точки отсчёта различны и пока не сопоставимы",
+        "График явно пересмотрен и подтверждён"
+      ],
+      "required_evidence": [
+        "Точки отсчёта",
+        "Окна и длительности",
+        "Предшественники",
+        "Подтверждения графика"
+      ],
+      "severity": "major",
+      "default_decision": "request_correction",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "При материальном влиянии зависимый протокол не допускается; будущая дата не считается выполнением",
+      "tests": [
+        "CONS-T08",
+        "CONS-T12"
+      ],
+      "classification": "requires_decision",
+      "source_support": "direct_with_analytic_dependency_model",
+      "decision_refs": [
+        "DEC-01",
+        "DEC-08"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-MEM-01",
+      "name": "История не перезаписывается",
+      "categories": [],
+      "basis": "Новое аналитическое уточнение состояния по заданию",
+      "source_refs": [
+        "S-REQUEST",
+        "S-NEGOTIATION"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-006"
+      ],
+      "detect_when": [
+        "Удалена прежняя версия или изменён payload прежнего события",
+        "Дубль повторно изменяет состояние"
+      ],
+      "not_a_violation_when": [
+        "Добавлена явная коррекция с исходной ссылкой",
+        "Неизменный дубль не применяется повторно"
+      ],
+      "required_evidence": [
+        "event_id и sequence_number",
+        "Исходная запись",
+        "Ссылка на коррекцию"
+      ],
+      "severity": "major",
+      "default_decision": "request_correction",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Восстановить трассировку; конфликт целостности журнала не считать новой предметной категорией; при влиянии на протокол закрыть допуск",
+      "tests": [
+        "CONS-T06",
+        "CONS-T17"
+      ],
+      "classification": "proposed",
+      "source_support": "new_state_detail_requested_by_user",
+      "decision_refs": [
+        "DEC-09"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-BASE-01",
+      "name": "Ограничения меняются только разрешённым обновлением",
+      "categories": [
+        "AUTHORITY_CONFLICT",
+        "RESOURCE_CONFLICT"
+      ],
+      "basis": "Профили и новое уточнение процедуры по заданию",
+      "source_refs": [
+        "S-PROFILES",
+        "S-SCENARIO",
+        "S-REQUEST",
+        "S-ETHICS"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-001",
+        "CITYN-J-002",
+        "CITYN-J-003",
+        "CITYN-J-008"
+      ],
+      "detect_when": [
+        "Агент сам увеличивает лимит, присваивает полномочие или отменяет обязательный критерий"
+      ],
+      "not_a_violation_when": [
+        "Есть разрешённое утверждение новой версии с моментом действия и проверкой затронутых обязательств"
+      ],
+      "required_evidence": [
+        "Документ разрешения",
+        "Утверждающий и его полномочие",
+        "Старая и новая версии",
+        "effective_from"
+      ],
+      "severity": "critical",
+      "default_decision": "reject_action",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Сохранить действующие ограничения; реальное законодательство не отменяется сценарием",
+      "tests": [
+        "CONS-T03",
+        "CONS-T20"
+      ],
+      "classification": "requires_decision",
+      "source_support": "direct_limits_update_procedure_unspecified",
+      "decision_refs": [
+        "DEC-01",
+        "DEC-07"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-RECON-01",
+      "name": "Различать уступку и нарушение принятого условия",
+      "categories": [
+        "POSITION_CONFLICT",
+        "COMMITMENT_CONFLICT"
+      ],
+      "basis": "Новое аналитическое уточнение без запрета компромисса",
+      "source_refs": [
+        "S-REQUEST",
+        "S-PROFILES",
+        "S-BOOK",
+        "S-NEGOTIATION"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-006",
+        "CITYN-J-009"
+      ],
+      "detect_when": [
+        "Судья запрещает изменение только из-за отличия числа",
+        "Принятое условие изменяется как простое предпочтение"
+      ],
+      "not_a_violation_when": [
+        "Объяснённое изменение непринятого предложения допустимо в пределах роли",
+        "Пересмотр принятого условия проходит процедуру"
+      ],
+      "required_evidence": [
+        "Статус предыдущей версии",
+        "Причина",
+        "Границы роли",
+        "Подтверждения изменения"
+      ],
+      "severity": "major",
+      "default_decision": "request_correction",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Не запрещать допустимую уступку; при допустимом действии pass, при новой попытке оставить прежнюю историю",
+      "tests": [
+        "CONS-T02",
+        "CONS-T05",
+        "CONS-T12",
+        "CONS-T15"
+      ],
+      "classification": "proposed",
+      "source_support": "new_analytic_distinction_supported_by_profiles",
+      "decision_refs": [
+        "DEC-05",
+        "DEC-09"
+      ],
+      "implementation_binding": false
+    },
+    {
+      "id": "CONS-RAT-01",
+      "name": "Ратификация не подменяет согласие и активацию",
+      "categories": [
+        "PROTOCOL_CONFLICT"
+      ],
+      "basis": "Исходные процедуры и запрошенные состояния условия",
+      "source_refs": [
+        "S-VOTE",
+        "S-PROTOCOL",
+        "S-REQUEST"
+      ],
+      "judge_rule_ids": [
+        "CITYN-J-002",
+        "CITYN-J-007",
+        "CITYN-J-010"
+      ],
+      "detect_when": [
+        "Большинство заменяет согласие владельца",
+        "Голоса переносятся на другую версию",
+        "Учебное принятие выдано за реальный договор или активный условный ресурс"
+      ],
+      "not_a_violation_when": [
+        "Условное включение подтверждено всеми нужными владельцами и явно остаётся намерением",
+        "Учебная ратификация не меняет pending-предикаты"
+      ],
+      "required_evidence": [
+        "Точный протокол и допуск",
+        "Подтверждения",
+        "Пять независимых голосов",
+        "Тип результата и условия активации"
+      ],
+      "severity": "critical",
+      "default_decision": "block_agreement",
+      "missing_evidence_decision": "request_evidence",
+      "effect": "Не объявлять игровую победу намерений, ратификацию или активность ресурса без основания; изменение ratified не поддерживается до DEC-04.",
+      "tests": [
+        "CONS-T13",
+        "CONS-T16",
+        "CONS-T18"
+      ],
+      "classification": "requires_decision",
+      "source_support": "direct_no_automatic_legal_effect_intent_status_unresolved",
+      "decision_refs": [
+        "DEC-01",
+        "DEC-03",
+        "DEC-04"
+      ],
+      "implementation_binding": false
+    }
+  ],
+  "status_model_ref": "agreement_lifecycle.md",
+  "rule_classification_ref": "decision_register.yaml",
+  "statuses_by_object": {
+    "proposal": [
+      "proposed",
+      "rejected",
+      "withdrawn",
+      "superseded"
+    ],
+    "participant_consent": [
+      "conditionally_accepted",
+      "accepted",
+      "rejected"
+    ],
+    "protocol_membership": [
+      "included_in_protocol"
+    ],
+    "document": [
+      "rejected",
+      "superseded",
+      "ratified"
+    ],
+    "obligation": [
+      "active"
+    ]
+  },
+  "unsupported_transitions": [
+    "ratified_document_to_superseded_until_DEC-04",
+    "intent_protocol_to_ratified_until_DEC-03"
+  ]
+}

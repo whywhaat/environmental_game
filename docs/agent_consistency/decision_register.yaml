@@ -1,0 +1,113 @@
+{
+  "id": "CONSISTENCY-DECISION-REGISTER",
+  "version": "1.0.0",
+  "language": "ru",
+  "access_scope": "architect",
+  "status": "awaiting_team_decisions",
+  "updated_at": "2026-10-20",
+  "format_note": "JSON-совместимое подмножество YAML 1.2; это данные документации, не конфигурация приложения.",
+  "classification_definitions": {
+    "approved": "Правило прямо следует из применимого исходного регламента и есть свидетельство утверждения этой редакции. Полезность, логичность, выполнение редакторской задачи и совпадение с кодом не являются таким свидетельством.",
+    "proposed": "Новая аналитическая рекомендация; для обязательной реализации требуется отдельное решение.",
+    "conflicting": "Формулировка противоречит указанному источнику или другому определению; до устранения не является требованием к реализации.",
+    "requires_decision": "Не определены обязательная редакция, область применения или допустимая процедура; прямое текстовое основание может быть известно, но этого недостаточно для утверждения."
+  },
+  "approval_policy": {
+    "new_approved_rules": 0,
+    "source_activation_evidence": "GAME-CONFIG и JUDGE-RULES содержат activation.approved=false; отдельное утверждение применимой редакции не найдено.",
+    "editorial_authorization": "Пользователь поручил уточнить аналитическую модель и маркировку примеров; это разрешение на документационную работу, не утверждение вариантов игровых решений.",
+    "decision_required_fields": ["selected_option", "decided_by", "decision_evidence", "effective_from", "affected_rule_versions"],
+    "not_approval": ["Рекомендованный вариант", "Истечение времени", "Флаг pass в демонстрации", "Большинство в вымышленном примере", "Создание этого файла"]
+  },
+  "rule_classifications": [
+    {"rule_id": "CONS-AUTH-01", "status": "requires_decision", "source_support": "direct", "sources": ["../../ecological_simulator_knowledge/03_judge/judge_rules.yaml", "../../ecological_simulator_knowledge/03_judge/authority_rules.md"], "locator": "CITYN-J-001/002; владелец подтверждает своё", "decision_refs": ["DEC-01"], "implementation_binding": false},
+    {"rule_id": "CONS-RES-01", "status": "requires_decision", "source_support": "direct_with_proposed_accounting_details", "sources": ["../../ecological_simulator_knowledge/03_judge/resource_rules.md"], "locator": "Предел, единицы, резерв и подтверждение ресурса", "decision_refs": ["DEC-01", "DEC-07"], "implementation_binding": false},
+    {"rule_id": "CONS-POS-01", "status": "proposed", "source_support": "new_detail_requested_by_user", "sources": ["position_change_rules.md", "../../ecological_simulator_knowledge/03_judge/negotiation_rules.md"], "locator": "Пять оснований и обязательные поля объяснения не утверждены как действующий контракт", "decision_refs": ["DEC-09"], "implementation_binding": false},
+    {"rule_id": "CONS-COM-01", "status": "requires_decision", "source_support": "direct_for_drafts_only", "sources": ["../../ecological_simulator_knowledge/04_game_rules/round_3.md", "../../ecological_simulator_knowledge/04_game_rules/voting_mechanics.md"], "locator": "Материальная правка проекта и отказ владельца до голосования; не процедура изменения ratified", "decision_refs": ["DEC-01", "DEC-04", "DEC-05"], "implementation_binding": false},
+    {"rule_id": "CONS-FACT-01", "status": "requires_decision", "source_support": "direct_with_proposed_comparison_details", "sources": ["../../ecological_simulator_knowledge/03_judge/evidence_rules.md"], "locator": "CITYN-J-004/005; сопоставление источников и границ вывода", "decision_refs": ["DEC-01", "DEC-08"], "implementation_binding": false},
+    {"rule_id": "CONS-PROTO-01", "status": "requires_decision", "source_support": "direct", "sources": ["../../ecological_simulator_knowledge/03_judge/agreement_rules.md", "../../ecological_simulator_knowledge/04_game_rules/agreement_structure.md"], "locator": "CITYN-J-007/009/010; точный состав подтверждённых условий", "decision_refs": ["DEC-01", "DEC-03", "DEC-06"], "implementation_binding": false},
+    {"rule_id": "CONS-TURN-01", "status": "requires_decision", "source_support": "direct_with_demo_handoff_detail", "sources": ["../../ecological_simulator_knowledge/04_game_rules/game_config.yaml", "../../ecological_simulator_knowledge/04_game_rules/negotiation_mechanics.md"], "locator": "turn_policy и один ход; явная передача — детализация примеров", "decision_refs": ["DEC-01"], "implementation_binding": false},
+    {"rule_id": "CONS-TIME-01", "status": "requires_decision", "source_support": "direct_with_analytic_dependency_model", "sources": ["../../ecological_simulator_knowledge/03_judge/judge_rules.yaml", "../../ecological_simulator_knowledge/04_game_rules/agreement_structure.md"], "locator": "CITYN-J-007/009; исполнители, сроки и зависимости", "decision_refs": ["DEC-01", "DEC-08"], "implementation_binding": false},
+    {"rule_id": "CONS-MEM-01", "status": "proposed", "source_support": "new_state_detail_requested_by_user", "sources": ["negotiation_state_specification.md"], "locator": "Последовательный журнал, идентичность и повторы событий", "decision_refs": ["DEC-09"], "implementation_binding": false},
+    {"rule_id": "CONS-BASE-01", "status": "requires_decision", "source_support": "direct_limits_update_procedure_unspecified", "sources": ["../../ecological_simulator_knowledge/01_common_knowledge/scenario_assumptions.yaml", "agent_state_specification.md"], "locator": "Лимиты и мандаты; владелец разрешённого обновления пока не определён", "decision_refs": ["DEC-01", "DEC-07"], "implementation_binding": false},
+    {"rule_id": "CONS-RECON-01", "status": "proposed", "source_support": "new_analytic_distinction_supported_by_profiles", "sources": ["position_change_rules.md", "agreement_lifecycle.md"], "locator": "Не запрещать обоснованный компромисс; различать предложение и принятое условие", "decision_refs": ["DEC-05", "DEC-09"], "implementation_binding": false},
+    {"rule_id": "CONS-RAT-01", "status": "requires_decision", "source_support": "direct_no_automatic_legal_effect_intent_status_unresolved", "sources": ["../../ecological_simulator_knowledge/04_game_rules/voting_mechanics.md", "../../ecological_simulator_knowledge/04_game_rules/end_conditions.md"], "locator": "Согласия владельцев, допуск и голоса; intent_protocol не объявлен победой", "decision_refs": ["DEC-01", "DEC-03", "DEC-04"], "implementation_binding": false}
+  ],
+  "historical_formulations": [
+    {"id": "HIST-01", "status": "conflicting", "path": "commitment_lifecycle.md", "former_claim": "superseded означает замену другой версией, но разрешён replacement_ref=null для отзыва без замены", "resolution": "В аналитической модели введён withdrawn; superseded требует конкретной замены", "editorial_state": "corrected", "decision_refs": ["DEC-05"]},
+    {"id": "HIST-02", "status": "conflicting", "path": "commitment_lifecycle.md", "former_claim": "accepted требует выполненных условий активации, хотя согласие и активация объявлены независимыми", "resolution": "accepted относится к записи согласия с текстом; active относится к отдельному обязательству", "editorial_state": "corrected", "decision_refs": ["DEC-05"]},
+    {"id": "HIST-03", "status": "requires_decision", "path": "commitment_lifecycle.md", "former_claim": "Предусмотрен переход ratified→superseded при новой допустимой процедуре, но самой процедуры в источнике нет", "resolution": "Переход не поддерживается; разрешён только учёт запроса, без создания процедуры", "editorial_state": "guarded_as_unsupported", "decision_refs": ["DEC-04"]}
+  ],
+  "decisions": [
+    {
+      "id": "DEC-01", "status": "requires_decision", "question": "Какая редакция регламента является обязательной и кто подтверждает её утверждение?",
+      "options": [{"id": "A", "text": "Утвердить конкретную версию документационного GAME-CONFIG и JUDGE-RULES с перечислением исключений"}, {"id": "B", "text": "Выбрать другую редакцию и отдельно согласовать отличия; код и flow не являются автоматическим решением"}],
+      "sources": ["../../ecological_simulator_knowledge/04_game_rules/game_config.yaml", "../../ecological_simulator_knowledge/03_judge/judge_rules.yaml", "../DOR_architecture.md"],
+      "pending_behavior": "Прямое основание в тексте отмечается отдельно от approved; новые рекомендации не обязательны для реализации.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    },
+    {
+      "id": "DEC-02", "status": "requires_decision", "question": "Как закрепить названия intent_protocol/final_agreement и их соответствие исходным conditional_intent/confirmed_plan?",
+      "options": [{"id": "A", "text": "Принять новые названия как аналитические синонимы при обязательной содержательной проверке, без изменения кода"}, {"id": "B", "text": "Сохранить исходные значения в реализации и использовать новые только в пояснениях документации"}],
+      "sources": ["../../ecological_simulator_knowledge/04_game_rules/round_3.md", "../../ecological_simulator_knowledge/04_game_rules/agreement_structure.md"],
+      "pending_behavior": "Типы разграничены в аналитическом тексте; значения приложения не переименовываются.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    },
+    {
+      "id": "DEC-03", "status": "requires_decision", "question": "Можно ли голосовать и утверждать intent_protocol и каков его игровой результат?",
+      "options": [{"id": "A", "text": "Считать намерения подготовительным документом без установленной победы и без игровой ратификации"}, {"id": "B", "text": "Отдельно утвердить процедуру принятия намерений как промежуточного результата, не равного победе final_agreement"}, {"id": "C", "text": "Предложить отдельный критерий игрового успеха для намерений; это изменение регламента, требующее явного утверждения"}],
+      "sources": ["../../ecological_simulator_knowledge/04_game_rules/game_overview.md", "../../ecological_simulator_knowledge/04_game_rules/consequences.md", "../../ecological_simulator_knowledge/04_game_rules/end_conditions.md"],
+      "pending_behavior": "game_victory=not_established; демонстрационные бюллетени не являются основанием действующей ратификации намерений.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    },
+    {
+      "id": "DEC-04", "status": "requires_decision", "question": "Нужен ли механизм изменения уже ratified-соглашения?",
+      "options": [{"id": "A", "text": "Сохранить механизм неподдерживаемым в текущей игре"}, {"id": "B", "text": "Поручить отдельно разработать и утвердить механизм для будущей редакции; эта запись не задаёт его шаги, лимиты или голоса"}],
+      "sources": ["../../ecological_simulator_knowledge/04_game_rules/voting_mechanics.md", "../../ecological_simulator_knowledge/04_game_rules/round_3.md"],
+      "pending_behavior": "Не открывать новый раунд, не применять ratified→superseded и не переносить на него доработку отклонённого проекта.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    },
+    {
+      "id": "DEC-05", "status": "requires_decision", "question": "Утверждается ли предложенная объектная семантика девяти статусов как обязательный контракт?",
+      "options": [{"id": "A", "text": "Принять agreement_lifecycle.md: отдельные предложение, согласие, включение, документ и обязательство"}, {"id": "B", "text": "Уточнить поля и переходы до реализации, сохраняя разделение согласия, ратификации и активации"}],
+      "sources": ["agreement_lifecycle.md", "consistency_resolution_proposal.md"],
+      "pending_behavior": "Старая смешанная схема выведена из аналитической модели; новая не считается автоматически реализованной или утверждённой игровой процедурой.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    },
+    {
+      "id": "DEC-06", "status": "requires_decision", "question": "Какие критерии профилей применяются к намерениям и как проверяется финальное соглашение?",
+      "options": [{"id": "A", "text": "Отдельно утвердить критерии подготовительного документа; для final_agreement сохранить все обязательные требования"}, {"id": "B", "text": "До выполнения обязательных критериев не давать намерениям статус принятого игрового документа"}],
+      "sources": ["../../ecological_simulator_knowledge/02_agents/city_administration/config.yaml", "../../ecological_simulator_knowledge/02_agents/industrial_holding/config.yaml", "../../ecological_simulator_knowledge/02_agents/regional_government/config.yaml", "../../ecological_simulator_knowledge/02_agents/city_residents/config.yaml", "../../ecological_simulator_knowledge/02_agents/environmental_ngo/config.yaml", "../DOD_protocol.md"],
+      "pending_behavior": "Нельзя считать отсутствие финансирования, оператора, защиты или мониторинга прохождением обязательного критерия final_agreement; обязательные критерии не смягчаются.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    },
+    {
+      "id": "DEC-07", "status": "requires_decision", "question": "Кто разрешает изменение карточек и как учитываются условные нагрузки/альтернативы?",
+      "options": [{"id": "A", "text": "Зафиксировать уполномоченных владельцев обновления, версии и отдельные книги предложений, резервирования и доступных ресурсов"}, {"id": "B", "text": "Оставить лимиты неизменными в запуске и согласовать модель условного учёта до её реализации"}],
+      "sources": ["../../ecological_simulator_knowledge/01_common_knowledge/scenario_assumptions.yaml", "../../ecological_simulator_knowledge/03_judge/resource_rules.md"],
+      "pending_behavior": "Неизвестный лимит остаётся null, агент не увеличивает его сам, условный источник не закрывает дефицит.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    },
+    {
+      "id": "DEC-08", "status": "requires_decision", "question": "Кто подтверждает источники, реальные мандаты, право, технические/экологические требования и методические адаптации?",
+      "options": [{"id": "A", "text": "Назначить предметных проверяющих и критерии достаточности доказательства по каждому виду утверждения"}, {"id": "B", "text": "Ограничить запуск явно демонстрационными данными до получения проверенных оснований"}],
+      "sources": ["../../ecological_simulator_knowledge/03_judge/evidence_rules.md", "../../ecological_simulator_knowledge/07_customer_methodology/book_case_boundary.md", "../../ecological_simulator_knowledge/09_handover/unresolved_questions.md"],
+      "pending_behavior": "Сохранять pending_evidence/unresolved_dispute, не выдумывать нормы и не активировать книжные METHOD-CHECK.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    },
+    {
+      "id": "DEC-09", "status": "requires_decision", "question": "Какие новые требования к объяснению позиции, истории и представлениям состояния станут обязательными?",
+      "options": [{"id": "A", "text": "Утвердить конкретную версию новых аналитических проверок и допустимые представления для ролей/судьи"}, {"id": "B", "text": "Провести отдельную аналитическую апробацию до утверждения, не подключая их как блокирующие требования приложения"}],
+      "sources": ["position_change_rules.md", "negotiation_state_specification.md", "../../ecological_simulator_knowledge/09_handover/access_matrix.yaml"],
+      "pending_behavior": "CONS-POS-01, CONS-MEM-01, CONS-RECON-01 остаются proposed; полное состояние не раскрывается всем агентам.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    },
+    {
+      "id": "DEC-10", "status": "requires_decision", "question": "Какие демонстрации можно признать нормативными контрольными примерами после выбора регламента?",
+      "options": [{"id": "A", "text": "Пока сохранить все как demonstration_proposal без установленной победы"}, {"id": "B", "text": "После DEC-01/03/06 отдельно перепроверить и утвердить каждую демонстрацию по выбранным критериям"}],
+      "sources": ["consistency_audit.md", "../../ecological_simulator_knowledge/08_negotiation_examples/step_by_step/README.md"],
+      "pending_behavior": "Название successful и ожидаемые голоса не являются эталоном победы; публичные реплики сохранены как учебные данные.",
+      "selected_option": null, "decided_by": null, "decision_evidence": [], "effective_from": null, "affected_rule_versions": []
+    }
+  ]
+}

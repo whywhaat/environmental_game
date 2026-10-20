@@ -51,16 +51,16 @@ unknowns:
 - Обязательность методики заказчика и права на распространение/индексацию предоставленной книги
 demo_resources:
   status: только демонстрации; ТРЕБУЕТ СОГЛАСОВАНИЯ для запуска
-  unit: ИЕ
-  project_cost: 100
+  unit: руб.
+  project_cost: 1000000000
   caps:
-    city_administration: 20
-    industrial_holding: 50
-    regional_government: 40
+    city_administration: 200000000
+    industrial_holding: 500000000
+    regional_government: 400000000
     city_residents: 0
     environmental_ngo: 0
   allocation:
-    city_administration: 20
-    industrial_holding: 45
-    regional_government: 35
-  note: 100 ИЕ включает 10 ИЕ резерва. Юридический ущерб и аварийные меры в эту учебную смету не включены.
+    city_administration: 200000000
+    industrial_holding: 450000000
+    regional_government: 350000000
+  note: 1000 млн руб. включает 100 млн руб. резерва. Юридический ущерб и аварийные меры в эту учебную смету не включены.
