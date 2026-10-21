@@ -30,4 +30,5 @@ def main(argv: list[str] | None = None) -> None:
     sys.stdout.write("\n")
 
 
-main()
+if __name__ == "__main__":
+    main()

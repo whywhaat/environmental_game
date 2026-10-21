@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from .catalog import COMPONENT_LABELS, ROLE_LABELS
+from .catalog import COMPONENT_LABELS, INDEPENDENT_MONITORS, MONITORING, NGO, ROLE_LABELS, WITHOUT_MEANS
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,16 @@ class Protocol:
     accepted: bool
     budgets: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default=())
+
+    @property
+    def monitoring_is_independent(self) -> bool:
+        """Учебник, табл. 4: независимая лаборатория, а не «своя»."""
+        return self.responsible[MONITORING] in INDEPENDENT_MONITORS
+
+    def lacks_means(self, component: str) -> bool:
+        """Методичка: у жителей и НКО нет денег и полномочий строить и возить воду; контроль — область НКО."""
+        owner = self.responsible[component]
+        return owner in WITHOUT_MEANS and not (component == MONITORING and owner == NGO)
 
     @property
     def credit(self) -> list[str]:
@@ -57,9 +67,11 @@ def read_protocol(game_result: dict[str, Any], players: list[dict[str, Any]] | N
             owner = None
         responsible[component] = owner
     for path in fields:
-        parts = path.split(".")
-        if parts[0] == "components" and parts[1] not in COMPONENT_LABELS:
-            warnings.append(f"Неизвестный компонент {parts[1]}: в прогнозе не учитывается.")
+        kind, ident = path.split(".")[:2]
+        if kind == "components" and ident not in COMPONENT_LABELS:
+            warnings.append(f"Неизвестный компонент {ident}: в прогнозе не учитывается.")
+        if kind == "participants" and ident not in ROLE_LABELS:
+            warnings.append(f"Неизвестная роль {ident} в поле {path}: взнос не учитывается.")
     votes = {role: bool(result.get("votes", {}).get(role, False)) for role in ROLE_LABELS}
     budgets = {player["id"]: player["budget"] for player in players or [] if player.get("id") in ROLE_LABELS}
     return Protocol(result["total_cost"], contributions, responsible, votes,

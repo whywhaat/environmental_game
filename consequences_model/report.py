@@ -21,8 +21,13 @@ INDICATORS = (
 )
 
 
+def millions(amount: float) -> str:
+    """Сумма в миллионах без единиц: 225 000 000 → «225»."""
+    return f"{amount / MLN:g}".replace(".", ",")
+
+
 def mln(amount: float) -> str:
-    return f"{amount / MLN:g}".replace(".", ",") + " млн ₽"
+    return millions(amount) + " млн ₽"
 
 
 def terms(result: dict[str, Any]) -> str:
@@ -30,6 +35,18 @@ def terms(result: dict[str, Any]) -> str:
     if month is None:
         return f"обещано {promised} мес., очистные не введены за 10 лет"
     return f"обещано {promised} мес., очистные введены на {month}-м месяце"
+
+
+def events(result: dict[str, Any]) -> str:
+    month, promised = result["commissioning_month"], result["promised_months"]
+    if month is None:
+        happened = ["очистные не введены за 10 лет"]
+    elif month > promised:
+        happened = [f"очистные введены на {month}-м месяце, на {month - promised} мес. позже обещанного"]
+    else:
+        happened = [f"очистные введены в обещанный срок, на {month}-м месяце"]
+    happened += [f"{ROLE_LABELS[role]} платит в кредит" for role in result["protocol"]["credit"]]
+    return "; ".join(happened)
 
 
 def temporary_measures(result: dict[str, Any]) -> str:
@@ -105,13 +122,20 @@ def render_report(result: dict[str, Any]) -> str:
 
 
 def render_herald_prompt(result: dict[str, Any]) -> str:
-    outcome, year_10 = result["outcome"], result["state"]["year_10"]["subsystems"]
+    outcome, state = result["outcome"], result["state"]
+    year_10 = state["year_10"]["subsystems"]
     facts = [f"Исход: «{outcome['name']}». {outcome['description']}",
              f"Сроки: {terms(result)}.",
-             f"Распределение затрат: {cost_split(result)}.",
-             "Состояние через 10 лет: " + "; ".join(f"{label} — {year_10[subsystem]}"
-                                                    for subsystem, label in SUBSYSTEM_LABELS.items()) + ".",
-             f"Временные меры: {temporary_measures(result)}."]
+             f"Распределение затрат: {cost_split(result)}."]
+    for moment, label in MOMENT_LABELS.items():
+        month, levels = state[moment]["month"], state[moment]["subsystems"]
+        if levels is None:
+            facts.append(f"{label}: очистные не введены за 10 лет.")
+            continue
+        heading = f"{label} ({month}-й мес.)" if moment == "commissioning" else label
+        facts.append(f"{heading}: " + "; ".join(f"{name} — {levels[subsystem]}"
+                                               for subsystem, name in SUBSYSTEM_LABELS.items()) + ".")
+    facts += [f"События: {events(result)}.", f"Временные меры: {temporary_measures(result)}."]
     facts += [f"{name}: {words[year_10[subsystem]]}." for name, subsystem, words in INDICATORS]
     for role, checks in result["fates"].items():
         facts.append(f"{ROLE_LABELS[role]}: " + "; ".join(

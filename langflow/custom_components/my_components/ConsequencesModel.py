@@ -4,11 +4,12 @@ from lfx.schema.data import Data
 from lfx.schema.message import Message
 
 from consequences_model import forecast
+from consequences_model.catalog import DEFAULT_PROMISED_MONTHS
 
 
 class ConsequencesModel(Component):
     display_name = "Модель последствий"
-    description = "К чему придут город N и участники через 10 лет после голосования по договору."
+    description = "К чему придут город N и участники через 10 лет после голосования по протоколу."
     icon = "landmark"
 
     inputs = [
@@ -16,7 +17,7 @@ class ConsequencesModel(Component):
                   info="Выход оркестратора игры."),
         DataInput(name="players", display_name="Players", is_list=True, required=False,
                   info="Профили игроков: из них берутся бюджеты, чтобы видеть кредиты."),
-        IntInput(name="promised_months", display_name="Обещанный срок ввода очистных, мес.", value=36,
+        IntInput(name="promised_months", display_name="Обещанный срок ввода очистных, мес.", value=DEFAULT_PROMISED_MONTHS,
                  info="В игре срок не обсуждается; это допущение модели."),
     ]
     outputs = [
@@ -26,10 +27,9 @@ class ConsequencesModel(Component):
     ]
 
     def _forecast(self) -> dict:
-        if getattr(self, "_cached_forecast", None) is None:
-            players = [item.data for item in (self.players or [])]
-            self._cached_forecast = forecast(self.game_result.data, players, int(self.promised_months))
-        return self._cached_forecast
+        # Прогноз дешёвый и детерминированный: считаем на каждый выход, без кэша между запусками.
+        players = [item.data for item in (self.players or [])]
+        return forecast(self.game_result.data, players, int(self.promised_months))
 
     def build_forecast(self) -> Data:
         return Data(data=self._forecast())

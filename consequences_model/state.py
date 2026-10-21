@@ -6,7 +6,8 @@ from typing import Any
 
 from .catalog import (ACHIEVED, ADMIN, CITY_PAID_ALL_SHARE, FAILED, FULL, FUNDING_FROM_OTHERS_SHARE, HOLDING,
                       HOLDING_PAID_ALL_SHARE, LATE_WITHOUT_WATER_MONTHS, MEDIA_HOLDING_MIN_SHARE, MONITORING, NGO,
-                      NONE, PARTLY, REGION, REGION_LOW_COST_SHARE, RESIDENTS, WATER, WATER_MAX_MONTHS)
+                      HORIZON_MONTHS, NONE, PARTLY, REGION, REGION_LOW_COST_SHARE, RESIDENTS, WATER,
+                      WATER_MAX_MONTHS, YEAR_1_MONTH)
 
 
 def level(failed: bool, achieved: bool) -> str:
@@ -50,8 +51,8 @@ def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, st
     }
 
 
-def city_state(facts: dict[str, Any], horizon_month: int) -> dict[str, Any]:
-    moments = {"year_1": 12, "commissioning": facts["month"], "year_10": horizon_month}
+def city_state(facts: dict[str, Any]) -> dict[str, Any]:
+    moments = {"year_1": YEAR_1_MONTH, "commissioning": facts["month"], "year_10": HORIZON_MONTHS}
     return {moment: {"month": month,
                      "subsystems": None if month is None else subsystems(facts, month, moment == "year_10")}
             for moment, month in moments.items()}

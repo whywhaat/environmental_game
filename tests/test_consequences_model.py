@@ -43,15 +43,15 @@ ALL_FOR = {role: True for role in ROLES}
 
 
 class OutcomeTests(unittest.TestCase):
-    def test_reference_deal_leads_to_open_river(self):
+    def test_reference_protocol_leads_to_open_river(self):
         result = forecast(game(FAIR_SPLIT, INDEPENDENT, ALL_FOR))
         self.assertEqual(result["outcome"]["name"], "Открытая река")
 
-    def test_rejected_deal_with_no_support_leads_to_stagnation(self):
+    def test_rejected_protocol_without_support_leads_to_stagnation(self):
         result = forecast(game(FAIR_SPLIT, INDEPENDENT, {}))
         self.assertEqual(result["outcome"]["name"], "Застой")
 
-    def test_rejected_deal_with_some_support_leads_to_each_for_themselves(self):
+    def test_rejected_protocol_with_some_support_leads_to_each_for_themselves(self):
         result = forecast(game(FAIR_SPLIT, INDEPENDENT, {ADMIN: True, HOLDING: True}))
         self.assertEqual(result["outcome"]["name"], "Каждый сам за себя")
         self.assertEqual(result["execution"]["contributions"][HOLDING], "частично")
@@ -70,7 +70,7 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(result["commissioning_month"], 36)
         self.assertEqual(result["outcome"]["name"], "Открытая река")
 
-    def test_deal_passed_over_residents_and_ngo_leads_to_decided_without_residents(self):
+    def test_protocol_accepted_over_residents_and_ngo_leads_to_decided_without_residents(self):
         result = forecast(game(FAIR_SPLIT, INDEPENDENT, {**ALL_FOR, RESIDENTS: False, NGO: False}))
         self.assertEqual(result["outcome"]["name"], "Решили без жителей")
 
@@ -97,7 +97,7 @@ class OutcomeTests(unittest.TestCase):
         result = forecast(game(FAIR_SPLIT, own_lab, ALL_FOR))
         self.assertEqual(result["outcome"]["name"], "Чистая вода, закрытые данные")
 
-    def test_good_deal_without_residents_support_leads_to_compromise(self):
+    def test_good_protocol_without_residents_support_leads_to_compromise(self):
         result = forecast(game(FAIR_SPLIT, INDEPENDENT, {**ALL_FOR, RESIDENTS: False}))
         self.assertEqual(result["outcome"]["name"], "Компромисс")
 
@@ -119,7 +119,7 @@ class ExecutionTests(unittest.TestCase):
 
 
 class CityStateTests(unittest.TestCase):
-    def test_reference_deal_reaches_every_subsystem_goal_by_year_ten(self):
+    def test_reference_protocol_reaches_every_subsystem_goal_by_year_ten(self):
         state = forecast(game(FAIR_SPLIT, INDEPENDENT, ALL_FOR))["state"]
         self.assertEqual(state["year_10"]["subsystems"], {
             "ecology": "достигнуто", "media": "достигнуто", "economy": "достигнуто",
@@ -145,7 +145,7 @@ class CityStateTests(unittest.TestCase):
 
 
 class FateTests(unittest.TestCase):
-    def test_reference_deal_fates_follow_role_goals(self):
+    def test_reference_protocol_fates_follow_role_goals(self):
         fates = forecast(game(FAIR_SPLIT, INDEPENDENT, ALL_FOR))["fates"]
         met = {role: [check["met"] for check in checks] for role, checks in fates.items()}
         self.assertEqual(met, {
@@ -189,6 +189,17 @@ class ReportTests(unittest.TestCase):
             for unproven in ("болезн", "заболев", "банкрот"):
                 self.assertNotIn(unproven, report.lower())
 
+    def test_texts_use_glossary_term_protocol(self):
+        for result_data in EVERY_OUTCOME.values():
+            result = forecast(result_data)
+            self.assertNotIn("договор", (result["report"] + result["herald_prompt"]).lower())
+
+    def test_herald_prompt_covers_three_moments_and_delay(self):
+        prompt = forecast(EVERY_OUTCOME["Долгострой"])["herald_prompt"]
+        self.assertIn("- Через год: Экология и наука — не достигнуто;", prompt)
+        self.assertIn("- При вводе очистных (72-й мес.): Экология и наука — частично;", prompt)
+        self.assertIn("- События: очистные введены на 72-м месяце, на 36 мес. позже обещанного.", prompt)
+
     def test_herald_prompt_carries_outcome_and_forbids_inventing_facts(self):
         prompt = forecast(game(FAIR_SPLIT, INDEPENDENT, ALL_FOR))["herald_prompt"]
         self.assertIn("«Вестник города N, 2036»", prompt)
@@ -214,6 +225,11 @@ class GameResultTests(unittest.TestCase):
         self.assertNotIn(HOLDING, result["execution"]["contributions"])
         self.assertIn("Конфликт в поле participants.industrial_holding.contribution: обязательство считается "
                       "незаявленным.", result["warnings"])
+
+    def test_unknown_participant_is_reported_and_ignored(self):
+        result_data = game({**FAIR_SPLIT, "mayor": 10 * MLN}, INDEPENDENT, ALL_FOR)
+        self.assertEqual(forecast(result_data)["warnings"],
+                         ["Неизвестная роль mayor в поле participants.mayor.contribution: взнос не учитывается."])
 
     def test_unknown_component_and_role_are_reported_and_ignored(self):
         result_data = game(FAIR_SPLIT, {**INDEPENDENT, "water_supply": "mayor", "extra_works": ADMIN}, ALL_FOR)
@@ -300,6 +316,20 @@ class ExplanationTests(unittest.TestCase):
                                "истинное состояние реки неизвестно."}, rules)
         self.assertEqual(rules[-1]["text"], "Исход «Чистая вода, закрытые данные»: "
                                             "мониторинг не независимый или выполнен не полностью.")
+
+    def test_city_state_rules_are_explained_with_sources(self):
+        rules = forecast(game(FAIR_SPLIT, INDEPENDENT, ALL_FOR))["explanation"]["rules"]
+        self.assertIn({"step": "Состояние города", "source": "Учебник, 3.1, табл. 4, 5",
+                       "text": "Экология и наука через 10 лет — достигнуто: очистные введены, мониторинг "
+                               "независимый и выполнен полностью."}, rules)
+
+    def test_cap_for_residents_is_explained_only_when_it_applied(self):
+        residents_build = {**INDEPENDENT, "reconstruction": RESIDENTS}
+        capped = forecast(game(FAIR_SPLIT, residents_build, ALL_FOR))["explanation"]["rules"]
+        not_capped = forecast(game(FAIR_SPLIT, residents_build, {RESIDENTS: True}))["explanation"]["rules"]
+        cap = "Компонент «Реконструкция» ведут жители: нет денег и полномочий → не выше «частично»."
+        self.assertIn(cap, [rule["text"] for rule in capped])
+        self.assertNotIn(cap, [rule["text"] for rule in not_capped])
 
     def test_delay_is_broken_down_in_explanation(self):
         texts = [rule["text"] for rule in forecast(EVERY_OUTCOME["Долгострой"])["explanation"]["rules"]]
