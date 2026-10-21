@@ -40,6 +40,7 @@ services:
       - langflow_data:/app/langflow
       - ./custom_components:/app/custom_components
       - ../config:/app/config:ro
+      - ../consequences_model:/app/consequences_model:ro
 
 volumes:
   postgres_data:
