@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from .core import Assignment, GameConfig, GameError, State, funding_total, is_complete, merge_round, parse_sets, render_table, score_state
 from .llm import ChatModel
@@ -133,7 +133,9 @@ def _round_notice(number: int, limit: int) -> str:
     return notice + " После последнего раунда голосование состоится даже при незакрытых вопросах."
 
 
-def run_game(config: GameConfig, chat: ChatModel, player_model: str, converter_model: str) -> dict[str, Any]:
+def run_game(config: GameConfig, chat: ChatModel, player_model: str | Mapping[str, str], converter_model: str) -> dict[str, Any]:
+    def model_for(player_id: str) -> str:
+        return player_model[player_id] if isinstance(player_model, Mapping) else player_model
     state = State({path: [] for path in config.required_paths})
     turns: list[dict[str, Any]] = []
     rounds: list[dict[str, Any]] = []
@@ -155,7 +157,7 @@ def run_game(config: GameConfig, chat: ChatModel, player_model: str, converter_m
         session.append({"kind": "clock", "text": _round_notice(round_number, config.max_rounds)})
         for player in config.players:
             session.append({"kind": "floor", "text": f"Раунд {round_number}. Слово предоставлено: {player.name}."})
-            speech = chat.complete(player_model, _player_messages(player, config, session))
+            speech = chat.complete(model_for(player.id), _player_messages(player, config, session))
             raw_sets, actions = convert_speech(chat, converter_model, speech, player.id, config, seq)
             seq += len(actions)
             proposals.extend(actions)
@@ -175,7 +177,7 @@ def run_game(config: GameConfig, chat: ChatModel, player_model: str, converter_m
     vote_actions: list[Assignment] = []
     for player in config.players:
         session.append({"kind": "floor", "text": f"Слово предоставлено: {player.name}."})
-        speech, vote = _get_vote(chat, player_model, player, config, session)
+        speech, vote = _get_vote(chat, model_for(player.id), player, config, session)
         action = Assignment(f"participants.{player.id}.vote", vote, player.id, seq)
         seq += 1
         votes[player.id] = vote

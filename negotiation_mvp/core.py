@@ -93,7 +93,7 @@ class GameConfig:
             players.append(Player(
                 ident,
                 _nonempty_text(item.get("name"), "player name"),
-                _whole(item.get("budget"), "player budget", minimum=1),
+                _whole(item.get("budget"), "player budget", minimum=0),
                 float(share),
                 desired,
                 _nonempty_text(item.get("personal_context"), "personal context"),
@@ -228,7 +228,8 @@ def score_state(state: State, config: GameConfig) -> dict[str, float]:
     scores = {}
     for player in config.players:
         fact = state.value(f"participants.{player.id}.contribution") or 0
-        score = (player.expected_own_share * config.total_cost - fact) / player.budget
+        score = ((player.expected_own_share * config.total_cost - fact) / player.budget
+                 if player.budget else player.expected_own_share - fact / config.total_cost)
         for component_id, desired in player.desired_responsible.items():
             actual = state.value(f"components.{component_id}.responsible")
             if actual is None:
