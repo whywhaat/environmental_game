@@ -1,8 +1,8 @@
 """Модель последствий: итог игры → прогноз состояния города N через 10 лет."""
 
 import ast
-import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +12,7 @@ from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 from consequences_model import forecast
+from consequences_model.build_component import COMPONENT_PATH, render_component
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -271,7 +272,10 @@ class CommandLineTests(unittest.TestCase):
 
 
 def load_langflow_component():
-    """Загружает компонент без Langflow: модули lfx подменены заглушками."""
+    """Загружает компонент так, как его грузит Langflow: без `from __future__` и без регистрации модуля.
+
+    Модули lfx подменены заглушками.
+    """
     def module(name, **attributes):
         stub = ModuleType(name)
         stub.__dict__.update(attributes)
@@ -288,20 +292,17 @@ def load_langflow_component():
         "lfx.schema.data": module("lfx.schema.data", Data=SimpleNamespace),
         "lfx.schema.message": module("lfx.schema.message", Message=SimpleNamespace),
     }
+    tree = ast.parse(COMPONENT_PATH.read_text(encoding="utf-8"))
+    tree.body = [node for node in tree.body
+                 if not (isinstance(node, ast.ImportFrom) and node.module == "__future__")]
+    namespace = {}
     with mock.patch.dict(sys.modules, stubs):
-        spec = importlib.util.spec_from_file_location("consequences_component", COMPONENT_PATH)
-        component_module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = component_module  # как при обычном импорте: dataclass ищет свой модуль
-        spec.loader.exec_module(component_module)
-    return component_module.ConsequencesModel
-
-
-COMPONENT_PATH = ROOT / "langflow/custom_components/my_components/ConsequencesModel.py"
+        exec(compile(tree, str(COMPONENT_PATH), "exec"), namespace)
+    return namespace["ConsequencesModel"]
 
 
 class LangflowComponentTests(unittest.TestCase):
     def test_component_file_is_built_from_current_package(self):
-        from consequences_model.build_component import render_component
         self.assertEqual(COMPONENT_PATH.read_text(encoding="utf-8"), render_component(),
                          "Пересоберите компонент: python -m consequences_model.build_component")
 
@@ -333,6 +334,31 @@ class LangflowComponentTests(unittest.TestCase):
         self.assertIn("«Вестник города N, 2036»", component.build_herald_prompt().text)
 
 
+class ComponentBuildTests(unittest.TestCase):
+    """Сборка отказывается собирать файл, который вышел бы молча неправильным."""
+
+    def build_with(self, module, extra_code):
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp) / "consequences_model"
+            shutil.copytree(ROOT / "consequences_model", package, ignore=shutil.ignore_patterns("__pycache__"))
+            path = package / f"{module}.py"
+            source = path.read_text(encoding="utf-8") if path.exists() else '"""Новый модуль."""\n'
+            path.write_text(source + extra_code, encoding="utf-8")
+            return render_component(package)
+
+    def test_module_missing_from_build_order_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "extra"):
+            self.build_with("extra", "\nEXTRA = 1\n")
+
+    def test_import_from_module_built_later_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "forecast"):
+            self.build_with("catalog", "\nfrom .model import forecast\n")
+
+    def test_definition_shadowing_shared_import_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "field"):
+            self.build_with("state", "\n\ndef field():\n    return None\n")
+
+
 class NegotiationCoreContractTests(unittest.TestCase):
     """Итог настоящего ядра переговоров (negotiation_mvp) читается моделью последствий."""
 
@@ -352,14 +378,16 @@ class NegotiationCoreContractTests(unittest.TestCase):
         for player in config.players:
             replies += [proposal, proposal_sets] if player.id == ADMIN else ["Согласны.", "NO_CHANGES"]
         for player in config.players:
-            replies += ["Голосую за.", f"SET participants.{player.id}.vote = true"]
+            # Жители не голосуют: ядро записывает их голос как None.
+            replies += (["Подумаем.", "NO_CHANGES"] if player.id == RESIDENTS
+                        else ["Голосую за.", f"SET participants.{player.id}.vote = true"])
 
-        result = run_game(config, ScriptedChat(replies), "player", "converter")
-        self.assertTrue(result["accepted"])
-        prediction = forecast({"result": result}, players=demo["players"])
-        self.assertEqual(prediction["outcome"]["name"], "Открытая река")
-        self.assertEqual(prediction["protocol"]["credit"], [ADMIN, HOLDING, REGION])
-        self.assertEqual(prediction["warnings"], [])
+        game_result = run_game(config, ScriptedChat(replies), "player", "converter")
+        self.assertTrue(game_result["accepted"])
+        result = forecast({"result": game_result}, players=demo["players"])
+        self.assertIsNone(result["protocol"]["votes"][RESIDENTS])
+        self.assertEqual(result["outcome"]["name"], "Компромисс")
+        self.assertEqual(result["warnings"], [])
 
 
 class ScriptedChat:

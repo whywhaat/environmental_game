@@ -2,6 +2,10 @@
 
 На genaiflow.ru в JSON flow хранится только код узла, пакетов из репо там нет, поэтому модель
 встраивается в файл компонента целиком. Пересобрать: python -m consequences_model.build_component
+
+Сборка отказывается работать, если файл вышел бы молча неправильным: модуль пакета не попал в
+порядок сборки, модуль импортирует имя из модуля, который собирается позже, или имена из разных
+модулей и общих импортов перекрывают друг друга.
 """
 
 from __future__ import annotations
@@ -11,8 +15,9 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parent
 COMPONENT_PATH = PACKAGE.parent / "langflow/custom_components/my_components/ConsequencesModel.py"
-# Порядок важен: каждый модуль опирается только на предыдущие.
+# Порядок сборки: каждый модуль импортирует только из модулей выше.
 MODULES = ("catalog", "protocol", "state", "report", "explain", "model", "langflow_component")
+NOT_BUILT = {"__init__", "__main__", "build_component"}
 HEADER = '''"""Модель последствий для Langflow. СОБРАНО из пакета consequences_model — руками не править.
 
 Пересобрать: python -m consequences_model.build_component
@@ -22,42 +27,65 @@ from __future__ import annotations
 '''
 
 
-def top_level_names(tree: ast.Module) -> set[str]:
-    names = set()
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        elif isinstance(node, ast.Assign):
-            names.update(target.id for target in node.targets if isinstance(target, ast.Name))
-    return names
+def defined_names(node: ast.stmt) -> set[str]:
+    """Имена, которые оператор верхнего уровня определяет в модуле."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {node.name}
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name)}
+    return set()
 
 
-def render_component() -> str:
-    imports: list[str] = []
+def render_component(package: Path = PACKAGE) -> str:
+    modules = {path.stem for path in package.glob("*.py")} - NOT_BUILT
+    if modules != set(MODULES):
+        raise ValueError(f"Модули пакета и порядок сборки MODULES расходятся: {sorted(modules ^ set(MODULES))}")
+
+    definitions: dict[str, str] = {}  # имя → модуль, где оно определено
+    shared_imports: dict[str, str] = {}  # имя → откуда импортировано (общие импорты поднимаются наверх файла)
+    import_lines: list[str] = []
     sections: list[str] = []
-    defined: dict[str, str] = {}
     for module in MODULES:
-        source = (PACKAGE / f"{module}.py").read_text(encoding="utf-8")
+        source = (package / f"{module}.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
-        for name in top_level_names(tree):
-            if name in defined:
-                raise ValueError(f"Имя {name} определено и в {defined[name]}, и в {module}: сборка их смешает")
-            defined[name] = module
+        docstring = ast.get_docstring(tree)
+        if not docstring:
+            raise ValueError(f"У модуля {module} нет докстринга: из него берётся заголовок раздела")
         dropped: set[int] = set()
-        docstring = ast.get_docstring(tree) or ""
-        for node in tree.body:
-            is_docstring = isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and node is tree.body[0]
-            is_import = isinstance(node, (ast.Import, ast.ImportFrom))
-            if not (is_docstring or is_import):
-                continue
-            assert node.end_lineno is not None
-            dropped.update(range(node.lineno - 1, node.end_lineno))
-            relative = isinstance(node, ast.ImportFrom) and (node.level or node.module == "__future__")
-            if is_import and not relative:
-                imports.append(ast.get_source_segment(source, node) or "")
+        for index, node in enumerate(tree.body):
+            if index == 0:  # докстринг
+                dropped.update(range(node.lineno - 1, node.end_lineno or node.lineno))
+            elif isinstance(node, ast.ImportFrom) and node.module == "__future__":
+                dropped.update(range(node.lineno - 1, node.end_lineno or node.lineno))
+            elif isinstance(node, ast.ImportFrom) and node.level:
+                # Внутри пакета: имя должно быть уже определено в модуле выше, иначе в файле будет NameError.
+                for alias in node.names:
+                    if alias.asname or definitions.get(alias.name) != node.module:
+                        raise ValueError(f"{module} импортирует {alias.name} из .{node.module}: имя должно быть "
+                                         "определено в этом модуле, без переименования, и модуль — стоять выше "
+                                         "в MODULES")
+                dropped.update(range(node.lineno - 1, node.end_lineno or node.lineno))
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                origin = node.module if isinstance(node, ast.ImportFrom) else ""
+                for alias in node.names:
+                    name = alias.asname or alias.name.split(".")[0]
+                    source_name = f"{origin}.{alias.name}".lstrip(".")
+                    if name in definitions or shared_imports.get(name, source_name) != source_name:
+                        raise ValueError(f"Имя {name} из импорта в {module} перекрывается с другим определением")
+                    shared_imports[name] = source_name
+                import_lines.append(ast.get_source_segment(source, node) or "")
+                dropped.update(range(node.lineno - 1, node.end_lineno or node.lineno))
+            else:
+                if node.lineno - 1 in dropped:
+                    raise ValueError(f"В {module} оператор стоит в одной строке с импортом: разнесите их")
+                for name in defined_names(node):
+                    if name in shared_imports or definitions.get(name, module) != module:
+                        raise ValueError(f"Имя {name} в {module} перекрывает {definitions.get(name, 'общий импорт')}")
+                    definitions[name] = module
         body = "\n".join(line for number, line in enumerate(source.splitlines()) if number not in dropped).strip()
         sections.append(f"# --- consequences_model/{module}.py: {docstring.splitlines()[0]}\n\n{body}")
-    return HEADER + "\n" + "\n".join(dict.fromkeys(imports)) + "\n\n\n" + "\n\n\n".join(sections) + "\n"
+    return HEADER + "\n" + "\n".join(dict.fromkeys(import_lines)) + "\n\n\n" + "\n\n\n".join(sections) + "\n"
 
 
 def main() -> None:

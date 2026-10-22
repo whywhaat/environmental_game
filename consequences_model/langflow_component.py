@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from lfx.custom import Component
 from lfx.io import DataInput, IntInput, Output
 from lfx.schema.data import Data
@@ -30,7 +32,7 @@ class ConsequencesModel(Component):
         Output(name="herald_prompt", display_name="Промпт «Вестника»", method="build_herald_prompt"),
     ]
 
-    def _forecast(self) -> dict:
+    def _forecast(self) -> dict[str, Any]:
         # Прогноз дешёвый и детерминированный: считаем на каждый выход, без кэша между запусками.
         players = [item.data for item in (self.players or [])]
         return forecast(self.game_result.data, players, int(self.promised_months))

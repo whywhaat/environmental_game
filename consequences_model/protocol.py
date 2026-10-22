@@ -19,6 +19,10 @@ class Protocol:
     budgets: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default=())
 
+    def supports(self, role: str) -> bool:
+        """Роль поддержала протокол: голос «за». «Против» и «воздержался» — не поддержка."""
+        return self.votes[role] is True
+
     @property
     def monitoring_is_independent(self) -> bool:
         """Учебник, табл. 4: независимая лаборатория, а не «своя»."""
@@ -72,7 +76,7 @@ def read_protocol(game_result: dict[str, Any], players: list[dict[str, Any]] | N
             warnings.append(f"Неизвестный компонент {ident}: в прогнозе не учитывается.")
         if kind == "participants" and ident not in ROLE_LABELS:
             warnings.append(f"Неизвестная роль {ident} в поле {path}: взнос не учитывается.")
-    # True — «за», False — «против», None — воздержался или не голосовал.
+    # True — «за», False — «против», None — воздержался (ядро пишет None, если участник не проголосовал).
     raw_votes = result.get("votes") or {}
     votes = {role: raw_votes.get(role) if raw_votes.get(role) in (True, False) else None for role in ROLE_LABELS}
     budgets = {player["id"]: player["budget"] for player in players or [] if player.get("id") in ROLE_LABELS}

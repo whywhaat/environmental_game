@@ -24,10 +24,10 @@ def execution_rules(protocol: Protocol, facts: dict[str, Any]) -> list[dict[str,
             continue
         voted = f"«{VOTE_LABELS[protocol.votes[role]]}»"
         if protocol.accepted:
-            text = f"голос {voted} → обязательства " + ("выполняются полностью" if protocol.votes[role]
+            text = f"голос {voted} → обязательства " + ("выполняются полностью" if protocol.supports(role)
                                                        else "выполняются частично")
         else:
-            text = f"голос {voted}, протокол не принят → " + ("заявленное выполняется частично" if protocol.votes[role]
+            text = f"голос {voted}, протокол не принят → " + ("заявленное выполняется частично" if protocol.supports(role)
                                                              else "обязательства не выполняются")
         rules.append(rule("Исполнение", f"{ROLE_LABELS[role]}: {text}.", SOURCE_FORMALIZATION))
 

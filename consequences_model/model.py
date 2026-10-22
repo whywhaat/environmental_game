@@ -24,8 +24,8 @@ def execute(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
         if owner is None or owner == excluded:
             return NONE
         if protocol.accepted:
-            return FULL if protocol.votes[owner] else PARTIAL
-        return PARTIAL if protocol.votes[owner] else NONE
+            return FULL if protocol.supports(owner) else PARTIAL
+        return PARTIAL if protocol.supports(owner) else NONE
 
     contributions = {role: by_vote(role) for role in protocol.contributions}
     components = {component: by_vote(owner) for component, owner in protocol.responsible.items()}
@@ -70,13 +70,13 @@ def shares(protocol: Protocol) -> dict[str, float]:
 # Исходы проверяются по порядку, срабатывает первый подходящий.
 ACCEPTED_RULES = (
     ("nedostroy", lambda f: f["month"] is None),
-    ("without_residents", lambda f: not f["votes"][RESIDENTS] and not f["votes"][NGO]),
+    ("without_residents", lambda f: not f["support"][RESIDENTS] and not f["support"][NGO]),
     ("dolgostroy", lambda f: f["month"] > f["promised_months"] and f["components"][WATER] != FULL),
     ("holding_paid", lambda f: f["shares"][HOLDING] >= HOLDING_PAID_ALL_SHARE),
     ("city_paid", lambda f: f["shares"][ADMIN] >= CITY_PAID_ALL_SHARE),
     ("open_river", lambda f: f["month"] == f["promised_months"] and f["monitoring_ok"]
         and all(value == FULL for value in f["components"].values())
-        and f["votes"][RESIDENTS] and f["votes"][NGO]),
+        and f["support"][RESIDENTS] and f["support"][NGO]),
     ("closed_data", lambda f: not f["monitoring_ok"]),
     ("compromise", lambda f: True),
 )
@@ -105,7 +105,7 @@ def simulate(protocol: Protocol, promised_months: int, excluded: str | None = No
         "capped": execution["capped"],
         "levels": list(execution["contributions"].values()) + list(execution["components"].values()),
         "responsible": protocol.responsible,
-        "votes": protocol.votes,
+        "support": {role: protocol.supports(role) for role in ROLE_LABELS},
         "shares": shares(protocol),
         "credit": protocol.credit,
         "monitoring_ok": execution["components"][MONITORING] == FULL and protocol.monitoring_is_independent,

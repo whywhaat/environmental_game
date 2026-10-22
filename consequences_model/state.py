@@ -29,7 +29,7 @@ def water_at(facts: dict[str, Any], month: int) -> bool:
 def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, str]:
     built = built_by(facts, month)
     residents_have_water = built or water_at(facts, month)
-    votes, shares, credit = facts["votes"], facts["shares"], facts["credit"]
+    support, shares, credit = facts["support"], facts["shares"], facts["credit"]
     holding_paid = facts["contributions"].get(HOLDING) == FULL and shares[HOLDING] >= MEDIA_HOLDING_MIN_SHARE
     late_without_water = facts["components"][WATER] != FULL and (
         facts["month"] is None or facts["month"] > LATE_WITHOUT_WATER_MONTHS)
@@ -46,8 +46,8 @@ def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, st
         "law": level(facts["components"][MONITORING] == NONE,
                      facts["monitoring_ok"] and all(facts["responsible"].values())),
         # Табл. 5; методичка: доверие к власти, протесты.
-        "politics": level((not votes[RESIDENTS] and not votes[NGO]) or late_without_water or (horizon and not built),
-                          votes[RESIDENTS] is True and residents_have_water),
+        "politics": level((not support[RESIDENTS] and not support[NGO]) or late_without_water or (horizon and not built),
+                          support[RESIDENTS] and residents_have_water),
     }
 
 

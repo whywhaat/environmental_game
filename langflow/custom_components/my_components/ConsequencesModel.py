@@ -41,7 +41,7 @@ COMPONENT_LABELS = {
     RECONSTRUCTION: "Реконструкция",
 }
 
-# Голос по протоколу: ядро переговоров пишет None, если участник не проголосовал.
+# Голос по протоколу: None — воздержался (ядро пишет None, если участник не проголосовал).
 VOTE_LABELS = {True: "за", False: "против", None: "воздержался"}
 
 # Исполнение обязательства.
@@ -213,6 +213,10 @@ class Protocol:
     budgets: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default=())
 
+    def supports(self, role: str) -> bool:
+        """Роль поддержала протокол: голос «за». «Против» и «воздержался» — не поддержка."""
+        return self.votes[role] is True
+
     @property
     def monitoring_is_independent(self) -> bool:
         """Учебник, табл. 4: независимая лаборатория, а не «своя»."""
@@ -266,7 +270,7 @@ def read_protocol(game_result: dict[str, Any], players: list[dict[str, Any]] | N
             warnings.append(f"Неизвестный компонент {ident}: в прогнозе не учитывается.")
         if kind == "participants" and ident not in ROLE_LABELS:
             warnings.append(f"Неизвестная роль {ident} в поле {path}: взнос не учитывается.")
-    # True — «за», False — «против», None — воздержался или не голосовал.
+    # True — «за», False — «против», None — воздержался (ядро пишет None, если участник не проголосовал).
     raw_votes = result.get("votes") or {}
     votes = {role: raw_votes.get(role) if raw_votes.get(role) in (True, False) else None for role in ROLE_LABELS}
     budgets = {player["id"]: player["budget"] for player in players or [] if player.get("id") in ROLE_LABELS}
@@ -295,7 +299,7 @@ def water_at(facts: dict[str, Any], month: int) -> bool:
 def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, str]:
     built = built_by(facts, month)
     residents_have_water = built or water_at(facts, month)
-    votes, shares, credit = facts["votes"], facts["shares"], facts["credit"]
+    support, shares, credit = facts["support"], facts["shares"], facts["credit"]
     holding_paid = facts["contributions"].get(HOLDING) == FULL and shares[HOLDING] >= MEDIA_HOLDING_MIN_SHARE
     late_without_water = facts["components"][WATER] != FULL and (
         facts["month"] is None or facts["month"] > LATE_WITHOUT_WATER_MONTHS)
@@ -312,8 +316,8 @@ def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, st
         "law": level(facts["components"][MONITORING] == NONE,
                      facts["monitoring_ok"] and all(facts["responsible"].values())),
         # Табл. 5; методичка: доверие к власти, протесты.
-        "politics": level((not votes[RESIDENTS] and not votes[NGO]) or late_without_water or (horizon and not built),
-                          votes[RESIDENTS] is True and residents_have_water),
+        "politics": level((not support[RESIDENTS] and not support[NGO]) or late_without_water or (horizon and not built),
+                          support[RESIDENTS] and residents_have_water),
     }
 
 
@@ -512,10 +516,10 @@ def execution_rules(protocol: Protocol, facts: dict[str, Any]) -> list[dict[str,
             continue
         voted = f"«{VOTE_LABELS[protocol.votes[role]]}»"
         if protocol.accepted:
-            text = f"голос {voted} → обязательства " + ("выполняются полностью" if protocol.votes[role]
+            text = f"голос {voted} → обязательства " + ("выполняются полностью" if protocol.supports(role)
                                                        else "выполняются частично")
         else:
-            text = f"голос {voted}, протокол не принят → " + ("заявленное выполняется частично" if protocol.votes[role]
+            text = f"голос {voted}, протокол не принят → " + ("заявленное выполняется частично" if protocol.supports(role)
                                                              else "обязательства не выполняются")
         rules.append(rule("Исполнение", f"{ROLE_LABELS[role]}: {text}.", SOURCE_FORMALIZATION))
 
@@ -591,8 +595,8 @@ def execute(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
         if owner is None or owner == excluded:
             return NONE
         if protocol.accepted:
-            return FULL if protocol.votes[owner] else PARTIAL
-        return PARTIAL if protocol.votes[owner] else NONE
+            return FULL if protocol.supports(owner) else PARTIAL
+        return PARTIAL if protocol.supports(owner) else NONE
 
     contributions = {role: by_vote(role) for role in protocol.contributions}
     components = {component: by_vote(owner) for component, owner in protocol.responsible.items()}
@@ -637,13 +641,13 @@ def shares(protocol: Protocol) -> dict[str, float]:
 # Исходы проверяются по порядку, срабатывает первый подходящий.
 ACCEPTED_RULES = (
     ("nedostroy", lambda f: f["month"] is None),
-    ("without_residents", lambda f: not f["votes"][RESIDENTS] and not f["votes"][NGO]),
+    ("without_residents", lambda f: not f["support"][RESIDENTS] and not f["support"][NGO]),
     ("dolgostroy", lambda f: f["month"] > f["promised_months"] and f["components"][WATER] != FULL),
     ("holding_paid", lambda f: f["shares"][HOLDING] >= HOLDING_PAID_ALL_SHARE),
     ("city_paid", lambda f: f["shares"][ADMIN] >= CITY_PAID_ALL_SHARE),
     ("open_river", lambda f: f["month"] == f["promised_months"] and f["monitoring_ok"]
         and all(value == FULL for value in f["components"].values())
-        and f["votes"][RESIDENTS] and f["votes"][NGO]),
+        and f["support"][RESIDENTS] and f["support"][NGO]),
     ("closed_data", lambda f: not f["monitoring_ok"]),
     ("compromise", lambda f: True),
 )
@@ -672,7 +676,7 @@ def simulate(protocol: Protocol, promised_months: int, excluded: str | None = No
         "capped": execution["capped"],
         "levels": list(execution["contributions"].values()) + list(execution["components"].values()),
         "responsible": protocol.responsible,
-        "votes": protocol.votes,
+        "support": {role: protocol.supports(role) for role in ROLE_LABELS},
         "shares": shares(protocol),
         "credit": protocol.credit,
         "monitoring_ok": execution["components"][MONITORING] == FULL and protocol.monitoring_is_independent,
@@ -727,7 +731,7 @@ class ConsequencesModel(Component):
         Output(name="herald_prompt", display_name="Промпт «Вестника»", method="build_herald_prompt"),
     ]
 
-    def _forecast(self) -> dict:
+    def _forecast(self) -> dict[str, Any]:
         # Прогноз дешёвый и детерминированный: считаем на каждый выход, без кэша между запусками.
         players = [item.data for item in (self.players or [])]
         return forecast(self.game_result.data, players, int(self.promised_months))
