@@ -1,5 +1,6 @@
 """Модель последствий: итог игры → прогноз состояния города N через 10 лет."""
 
+import ast
 import importlib.util
 import json
 import subprocess
@@ -280,15 +281,39 @@ def load_langflow_component():
         "lfx.schema.data": module("lfx.schema.data", Data=SimpleNamespace),
         "lfx.schema.message": module("lfx.schema.message", Message=SimpleNamespace),
     }
-    path = ROOT / "langflow/custom_components/my_components/ConsequencesModel.py"
     with mock.patch.dict(sys.modules, stubs):
-        spec = importlib.util.spec_from_file_location("consequences_component", path)
+        spec = importlib.util.spec_from_file_location("consequences_component", COMPONENT_PATH)
         component_module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = component_module  # как при обычном импорте: dataclass ищет свой модуль
         spec.loader.exec_module(component_module)
     return component_module.ConsequencesModel
 
 
+COMPONENT_PATH = ROOT / "langflow/custom_components/my_components/ConsequencesModel.py"
+
+
 class LangflowComponentTests(unittest.TestCase):
+    def test_component_file_is_built_from_current_package(self):
+        from consequences_model.build_component import render_component
+        self.assertEqual(COMPONENT_PATH.read_text(encoding="utf-8"), render_component(),
+                         "Пересоберите компонент: python -m consequences_model.build_component")
+
+    def test_component_imports_only_stdlib_and_langflow(self):
+        # На genaiflow в JSON flow хранится только код узла: пакетов из репо там нет.
+        tree = ast.parse(COMPONENT_PATH.read_text(encoding="utf-8"))
+        imported = {node.module if isinstance(node, ast.ImportFrom) else alias.name
+                    for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                    for alias in node.names}
+        self.assertLessEqual(imported, {"__future__", "dataclasses", "json", "typing", "lfx.custom", "lfx.io",
+                                        "lfx.schema.data", "lfx.schema.message"})
+
+    def test_component_gives_same_forecast_as_package(self):
+        component = load_langflow_component()()
+        component.players, component.promised_months = [], 36
+        for result_data in EVERY_OUTCOME.values():
+            component.game_result = SimpleNamespace(data=result_data)
+            self.assertEqual(component.build_forecast().data, forecast(result_data))
+
     def test_component_turns_orchestrator_output_into_forecast_report_and_prompt(self):
         component = load_langflow_component()()
         component.game_result = SimpleNamespace(data=game(FAIR_SPLIT, INDEPENDENT, ALL_FOR))

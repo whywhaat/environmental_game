@@ -1,5 +1,5 @@
 ---
-status: superseded by ADR-0003
+status: superseded by ADR-0003, подход возвращён в ADR-0004
 ---
 
 # Компонент модели последствий для Langflow собирается из ядра
