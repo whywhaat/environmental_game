@@ -14,7 +14,7 @@ class Protocol:
     total_cost: int
     contributions: dict[str, int]
     responsible: dict[str, str | None]
-    votes: dict[str, bool]
+    votes: dict[str, bool | None]
     accepted: bool
     budgets: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default=())
@@ -72,7 +72,9 @@ def read_protocol(game_result: dict[str, Any], players: list[dict[str, Any]] | N
             warnings.append(f"Неизвестный компонент {ident}: в прогнозе не учитывается.")
         if kind == "participants" and ident not in ROLE_LABELS:
             warnings.append(f"Неизвестная роль {ident} в поле {path}: взнос не учитывается.")
-    votes = {role: bool(result.get("votes", {}).get(role, False)) for role in ROLE_LABELS}
+    # True — «за», False — «против», None — воздержался или не голосовал.
+    raw_votes = result.get("votes") or {}
+    votes = {role: raw_votes.get(role) if raw_votes.get(role) in (True, False) else None for role in ROLE_LABELS}
     budgets = {player["id"]: player["budget"] for player in players or [] if player.get("id") in ROLE_LABELS}
     return Protocol(result["total_cost"], contributions, responsible, votes,
                     bool(result.get("accepted")), budgets, tuple(warnings))

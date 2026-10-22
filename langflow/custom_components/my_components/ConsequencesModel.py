@@ -41,6 +41,9 @@ COMPONENT_LABELS = {
     RECONSTRUCTION: "Реконструкция",
 }
 
+# Голос по протоколу: ядро переговоров пишет None, если участник не проголосовал.
+VOTE_LABELS = {True: "за", False: "против", None: "воздержался"}
+
 # Исполнение обязательства.
 FULL = "полностью"
 PARTIAL = "частично"
@@ -69,8 +72,8 @@ OUTCOMES = {
     },
     "without_residents": {
         "name": "Решили без жителей",
-        "rule": "жители и НКО голосовали против",
-        "description": "Протокол приняли без жителей и экологов: они голосовали против. Работы идут, но решение "
+        "rule": "жители и НКО не поддержали протокол: голосовали против или воздержались",
+        "description": "Протокол приняли без жителей и экологов: они его не поддержали. Работы идут, но решение "
                        "воспринимается как навязанное: недовольство и протестная активность сохраняются, "
                        "экологическая тема политизирована (учебник, табл. 5, «Политика»).",
     },
@@ -193,8 +196,8 @@ SUBSYSTEM_CRITERIA = {
         FAILED: "мониторинг не выполняется или за него никто не отвечает"}),
     "politics": (SOURCE_TABLE_5_POLITICS, {
         ACHIEVED: "жители голосовали «за», и вода у них есть",
-        PARTLY: "жители голосовали против или без надёжной воды, но до массовых протестов не дошло",
-        FAILED: "жители и НКО против, или очистных нет, или жители долго без воды"}),
+        PARTLY: "жители не поддержали протокол или остались без надёжной воды, но до массовых протестов не дошло",
+        FAILED: "жители и НКО не поддержали протокол, или очистных нет, или жители долго без воды"}),
 }
 
 
@@ -205,7 +208,7 @@ class Protocol:
     total_cost: int
     contributions: dict[str, int]
     responsible: dict[str, str | None]
-    votes: dict[str, bool]
+    votes: dict[str, bool | None]
     accepted: bool
     budgets: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default=())
@@ -263,7 +266,9 @@ def read_protocol(game_result: dict[str, Any], players: list[dict[str, Any]] | N
             warnings.append(f"Неизвестный компонент {ident}: в прогнозе не учитывается.")
         if kind == "participants" and ident not in ROLE_LABELS:
             warnings.append(f"Неизвестная роль {ident} в поле {path}: взнос не учитывается.")
-    votes = {role: bool(result.get("votes", {}).get(role, False)) for role in ROLE_LABELS}
+    # True — «за», False — «против», None — воздержался или не голосовал.
+    raw_votes = result.get("votes") or {}
+    votes = {role: raw_votes.get(role) if raw_votes.get(role) in (True, False) else None for role in ROLE_LABELS}
     budgets = {player["id"]: player["budget"] for player in players or [] if player.get("id") in ROLE_LABELS}
     return Protocol(result["total_cost"], contributions, responsible, votes,
                     bool(result.get("accepted")), budgets, tuple(warnings))
@@ -308,7 +313,7 @@ def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, st
                      facts["monitoring_ok"] and all(facts["responsible"].values())),
         # Табл. 5; методичка: доверие к власти, протесты.
         "politics": level((not votes[RESIDENTS] and not votes[NGO]) or late_without_water or (horizon and not built),
-                          votes[RESIDENTS] and residents_have_water),
+                          votes[RESIDENTS] is True and residents_have_water),
     }
 
 
@@ -416,7 +421,7 @@ def render_report(result: dict[str, Any]) -> str:
              "| Роль | Голос | Взнос | Исполнение взноса |", "| --- | --- | --- | --- |"]
     for role, label in ROLE_LABELS.items():
         amount = protocol["contributions"].get(role)
-        lines.append(f"| {label} | {'за' if protocol['votes'][role] else 'против'} | "
+        lines.append(f"| {label} | {VOTE_LABELS[protocol['votes'][role]]} | "
                      f"{mln(amount) if amount else '—'} | {execution['contributions'].get(role, '—')} |")
     lines += ["", "| Компонент сметы | Ответственный | Исполнение |", "| --- | --- | --- |"]
     for component, label in COMPONENT_LABELS.items():
@@ -505,7 +510,7 @@ def execution_rules(protocol: Protocol, facts: dict[str, Any]) -> list[dict[str,
     for role in ROLE_LABELS:
         if role not in owners:
             continue
-        voted = "«за»" if protocol.votes[role] else "«против»"
+        voted = f"«{VOTE_LABELS[protocol.votes[role]]}»"
         if protocol.accepted:
             text = f"голос {voted} → обязательства " + ("выполняются полностью" if protocol.votes[role]
                                                        else "выполняются частично")

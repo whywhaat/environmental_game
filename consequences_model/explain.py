@@ -7,7 +7,7 @@ from typing import Any
 from .catalog import (ADMIN, COMPONENT_LABELS, HOLDING, MIN_COVERAGE_TO_BUILD, MONITORING, RESIDENTS, ROLE_LABELS,
                       SOURCE_FORMALIZATION, SOURCE_METODICHKA, SOURCE_OUTCOMES, SOURCE_TABLE_4,
                       SOURCE_TABLE_4_ANALOGY, SOURCE_TABLE_5_ECONOMY, SOURCE_TABLE_5_LAW, SUBSYSTEM_CRITERIA,
-                      SUBSYSTEM_LABELS)
+                      SUBSYSTEM_LABELS, VOTE_LABELS)
 from .protocol import Protocol
 from .report import millions
 
@@ -22,7 +22,7 @@ def execution_rules(protocol: Protocol, facts: dict[str, Any]) -> list[dict[str,
     for role in ROLE_LABELS:
         if role not in owners:
             continue
-        voted = "«за»" if protocol.votes[role] else "«против»"
+        voted = f"«{VOTE_LABELS[protocol.votes[role]]}»"
         if protocol.accepted:
             text = f"голос {voted} → обязательства " + ("выполняются полностью" if protocol.votes[role]
                                                        else "выполняются частично")

@@ -47,7 +47,7 @@ def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, st
                      facts["monitoring_ok"] and all(facts["responsible"].values())),
         # Табл. 5; методичка: доверие к власти, протесты.
         "politics": level((not votes[RESIDENTS] and not votes[NGO]) or late_without_water or (horizon and not built),
-                          votes[RESIDENTS] and residents_have_water),
+                          votes[RESIDENTS] is True and residents_have_water),
     }
 
 

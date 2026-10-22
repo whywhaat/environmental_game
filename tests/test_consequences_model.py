@@ -33,7 +33,7 @@ def game(contributions, responsible, votes, accepted=None, total_cost=270 * MLN)
         fields[f"components.{component}.responsible"] = [{"value": role, "player": role, "seq": 2}]
     votes = {role: votes.get(role, False) for role in ROLES}
     if accepted is None:
-        accepted = sum(votes.values()) > len(ROLES) / 2 and sum(contributions.values()) >= total_cost
+        accepted = sum(vote is True for vote in votes.values()) > len(ROLES) / 2 and sum(contributions.values()) >= total_cost
     return {"result": {"total_cost": total_cost, "final_state": {"fields": fields},
                        "votes": votes, "accepted": accepted, "final_scores": {}}}
 
@@ -227,6 +227,13 @@ class GameResultTests(unittest.TestCase):
         self.assertIn("Конфликт в поле participants.industrial_holding.contribution: обязательство считается "
                       "незаявленным.", result["warnings"])
 
+    def test_abstention_is_kept_and_counts_as_no_support(self):
+        votes = {ADMIN: True, HOLDING: True, REGION: True, RESIDENTS: None, NGO: None}
+        result = forecast(game(FAIR_SPLIT, INDEPENDENT, votes))
+        self.assertIsNone(result["protocol"]["votes"][RESIDENTS])
+        self.assertEqual(result["outcome"]["name"], "Решили без жителей")
+        self.assertIn("| Жители города N | воздержался |", result["report"])
+
     def test_unknown_participant_is_reported_and_ignored(self):
         result_data = game({**FAIR_SPLIT, "mayor": 10 * MLN}, INDEPENDENT, ALL_FOR)
         self.assertEqual(forecast(result_data)["warnings"],
@@ -324,6 +331,43 @@ class LangflowComponentTests(unittest.TestCase):
         self.assertEqual(component.build_forecast().data["protocol"]["credit"], [HOLDING])
         self.assertIn("**Исход: «Открытая река».**", component.build_report().text)
         self.assertIn("«Вестник города N, 2036»", component.build_herald_prompt().text)
+
+
+class NegotiationCoreContractTests(unittest.TestCase):
+    """Итог настоящего ядра переговоров (negotiation_mvp) читается моделью последствий."""
+
+    def test_game_played_by_negotiation_core_is_forecast(self):
+        from negotiation_mvp.core import GameConfig
+        from negotiation_mvp.engine import run_game
+
+        demo = json.loads((ROOT / "langflow/demo_config.json").read_text(encoding="utf-8"))
+        config = GameConfig.from_dict({**demo, "max_rounds": 1})
+        proposal = ("Предлагаю: администрация 40 млн, холдинг 150 млн, регион 80 млн, жители и НКО 0. "
+                    "Воду берём мы, мониторинг — регион, реконструкция — холдинг.")
+        proposal_sets = "\n".join(
+            [f"SET participants.{role}.contribution = {amount}" for role, amount in
+             {ADMIN: 40 * MLN, HOLDING: 150 * MLN, REGION: 80 * MLN, RESIDENTS: 0, NGO: 0}.items()]
+            + [f'SET components.{component}.responsible = "{role}"' for component, role in INDEPENDENT.items()])
+        replies = []
+        for player in config.players:
+            replies += [proposal, proposal_sets] if player.id == ADMIN else ["Согласны.", "NO_CHANGES"]
+        for player in config.players:
+            replies += ["Голосую за.", f"SET participants.{player.id}.vote = true"]
+
+        result = run_game(config, ScriptedChat(replies), "player", "converter")
+        self.assertTrue(result["accepted"])
+        prediction = forecast({"result": result}, players=demo["players"])
+        self.assertEqual(prediction["outcome"]["name"], "Открытая река")
+        self.assertEqual(prediction["protocol"]["credit"], [ADMIN, HOLDING, REGION])
+        self.assertEqual(prediction["warnings"], [])
+
+
+class ScriptedChat:
+    def __init__(self, replies):
+        self.replies = iter(replies)
+
+    def complete(self, model, messages):
+        return next(self.replies)
 
 
 class ExplanationTests(unittest.TestCase):

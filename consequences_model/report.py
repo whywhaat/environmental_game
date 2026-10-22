@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .catalog import (ACHIEVED, COMPONENT_LABELS, FAILED, MOMENT_LABELS, PARTLY, ROLE_LABELS, SUBSYSTEM_LABELS,
-                      WATER, WATER_MAX_MONTHS)
+                      VOTE_LABELS, WATER, WATER_MAX_MONTHS)
 
 MLN = 1_000_000
 
@@ -78,7 +78,7 @@ def render_report(result: dict[str, Any]) -> str:
              "| Роль | Голос | Взнос | Исполнение взноса |", "| --- | --- | --- | --- |"]
     for role, label in ROLE_LABELS.items():
         amount = protocol["contributions"].get(role)
-        lines.append(f"| {label} | {'за' if protocol['votes'][role] else 'против'} | "
+        lines.append(f"| {label} | {VOTE_LABELS[protocol['votes'][role]]} | "
                      f"{mln(amount) if amount else '—'} | {execution['contributions'].get(role, '—')} |")
     lines += ["", "| Компонент сметы | Ответственный | Исполнение |", "| --- | --- | --- |"]
     for component, label in COMPONENT_LABELS.items():
