@@ -331,6 +331,11 @@ class ExplanationTests(unittest.TestCase):
         self.assertIn(cap, [rule["text"] for rule in capped])
         self.assertNotIn(cap, [rule["text"] for rule in not_capped])
 
+    def test_vote_rule_reads_naturally_for_rejected_protocol(self):
+        texts = [rule["text"] for rule in forecast(EVERY_OUTCOME["Каждый сам за себя"])["explanation"]["rules"]]
+        self.assertIn("Промышленный холдинг: голос «за», протокол не принят → заявленное выполняется частично.", texts)
+        self.assertIn("Региональная власть: голос «против», протокол не принят → обязательства не выполняются.", texts)
+
     def test_delay_is_broken_down_in_explanation(self):
         texts = [rule["text"] for rule in forecast(EVERY_OUTCOME["Долгострой"])["explanation"]["rules"]]
         self.assertIn("Внесено 225 из 270 млн ₽ (83%) → очистные введены на 72-м месяце: обещано 36, "
