@@ -32,7 +32,11 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(config.total_cost, 270_000_000)
         self.assertEqual(len(config.players), 5)
         state = merge_round(State(), parse_sets("SET participants.city_residents.contribution = 27000000", "city_residents", config), config)
-        self.assertAlmostEqual(score_state(state, config)["city_residents"], -0.1)
+        self.assertAlmostEqual(score_state(state, config)["city_residents"], 24.7)
+
+    def test_shared_funding_score_with_no_player_budget(self):
+        config = GameConfig.from_dict({**DEMO, "players": [{**player, "budget": 0} for player in DEMO["players"]]})
+        self.assertTrue(all(score == 40 for score in score_state(State(), config).values()))
 
     def test_routed_models_and_files(self):
         calls = {player["id"]: 0 for player in DEMO["players"]}

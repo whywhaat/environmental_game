@@ -17,7 +17,7 @@ def _speech(text: str) -> str:
 
 
 def _score(value: float) -> str:
-    return f"{value:+g}".replace(".", ",")
+    return f"{value:g}".replace(".", ",")
 
 
 def _field_name(path: str, config: GameConfig) -> str:
@@ -58,8 +58,9 @@ def render_report(result: dict[str, Any], config: GameConfig) -> str:
     lines.extend(["", "## Голосование", ""])
     for vote in (turn for turn in result["turns"] if turn.get("phase") == "vote"):
         player_id = vote["speaker"]
-        decision = "за" if result["votes"][player_id] else "против"
-        lines.extend([f"### {names[player_id]} — {decision}", "", _speech(vote["speech"]), ""])
+        recorded = result["votes"][player_id]
+        decision = "воздержался" if recorded is None else "за" if recorded else "против"
+        lines.extend([f"### {names[player_id]} — {decision}", "", _speech(vote["speech"]), "", "**Извлечённые SET:**", "", "```text", vote["sets"], "```", ""])
     final_round = result["rounds"][-1]
     lines.extend([
         "## Итог", "",

@@ -224,12 +224,14 @@ def merge_round(state: State, assignments: list[Assignment], config: GameConfig)
     return next_state
 
 
-def score_state(state: State, config: GameConfig) -> dict[str, float]:
+def score_state(state: State, config: GameConfig, *, signed: bool = False) -> dict[str, float]:
     scores = {}
+    total_budget = sum(player.budget for player in config.players)
+    funding_gap = (min(funding_total(state, config), config.total_cost) - config.total_cost) / (total_budget or config.total_cost)
     for player in config.players:
         fact = state.value(f"participants.{player.id}.contribution") or 0
         score = ((player.expected_own_share * config.total_cost - fact) / player.budget
-                 if player.budget else player.expected_own_share - fact / config.total_cost)
+                 if player.budget else player.expected_own_share - fact / config.total_cost) + funding_gap
         for component_id, desired in player.desired_responsible.items():
             actual = state.value(f"components.{component_id}.responsible")
             if actual is None:
@@ -238,7 +240,7 @@ def score_state(state: State, config: GameConfig) -> dict[str, float]:
                 score -= 1
             elif actual == desired:
                 score += 1
-        scores[player.id] = round(score, 10)
+        scores[player.id] = round(max(0, min(100, 100 + 10 * score - (0 if signed else 50))), 10)
     return scores
 
 
@@ -250,7 +252,7 @@ def is_complete(state: State, config: GameConfig) -> bool:
     return not state.conflicts() and all(state.value(path) is not None for path in config.required_paths) and funding_total(state, config) >= config.total_cost
 
 
-def render_table(state: State, config: GameConfig) -> str:
+def render_table(state: State, config: GameConfig, *, signed: bool = False) -> str:
     names = {player.id: player.name for player in config.players}
     component_names = {component.id: component.name for component in config.components}
     rows = ["| Поле | Значение и автор | Конфликт |", "| --- | --- | --- |"]
@@ -275,9 +277,9 @@ def render_table(state: State, config: GameConfig) -> str:
                 value = "За" if value else "Против"
             displayed.append(f"{value} ({names[record['player']]})")
         rows.append(f"| {label} | {'; '.join(displayed) if displayed else '—'} | {'Да' if state.conflict(path) else 'Нет'} |")
-    scores = score_state(state, config)
+    scores = score_state(state, config, signed=signed)
     for player in config.players:
-        score = f"{scores[player.id]:+g}".replace(".", ",")
+        score = f"{scores[player.id]:g}".replace(".", ",")
         contribution = state.value(f"participants.{player.id}.contribution")
         credit = "—" if contribution is None else f"{max(0, contribution - player.budget) / 1_000_000:g} млн ₽"
         rows.append(f"| Оценка: {player.name} | {score} | — |")
