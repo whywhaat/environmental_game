@@ -17,7 +17,7 @@ PACKAGE = Path(__file__).resolve().parent
 COMPONENT_PATH = PACKAGE.parent / "langflow/custom_components/my_components/ConsequencesModel.py"
 # Порядок сборки: каждый модуль импортирует только из модулей выше.
 MODULES = ("catalog", "protocol", "state", "report", "explain", "model", "langflow_component")
-NOT_BUILT = {"__init__", "__main__", "build_component"}
+NOT_BUILT = {"__init__", "__main__", "build_component", "build_flow"}
 HEADER = '''"""Модель последствий для Langflow. СОБРАНО из пакета consequences_model — руками не править.
 
 Пересобрать: python -m consequences_model.build_component

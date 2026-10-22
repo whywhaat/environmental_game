@@ -13,6 +13,7 @@ from unittest import mock
 
 from consequences_model import forecast
 from consequences_model.build_component import COMPONENT_PATH, render_component
+from consequences_model.build_flow import CHAT, FLOW_PATH, NODE, SOURCE_FLOW_PATH, build_flow
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -332,6 +333,43 @@ class LangflowComponentTests(unittest.TestCase):
         self.assertEqual(component.build_forecast().data["protocol"]["credit"], [HOLDING])
         self.assertIn("**Исход: «Открытая река».**", component.build_report().text)
         self.assertIn("«Вестник города N, 2036»", component.build_herald_prompt().text)
+
+
+REBUILD_FLOW = ('Пересоберите flow: uv run --no-project --python 3.12 --with "lfx==1.12.5" '
+                "python -m consequences_model.build_flow")
+
+
+class LangflowFlowTests(unittest.TestCase):
+    """Свой flow: граф переговоров без изменений и узел модели последствий."""
+
+    def setUp(self):
+        self.source = json.loads(SOURCE_FLOW_PATH.read_text(encoding="utf-8"))
+        self.flow = json.loads(FLOW_PATH.read_text(encoding="utf-8"))
+        self.node = next(node for node in self.flow["data"]["nodes"] if node["id"] == NODE)
+
+    def test_flow_is_built_from_current_negotiation_flow(self):
+        # Шаблон узла строит lfx, всё остальное берётся из графа переговоров.
+        self.assertEqual(self.flow, build_flow(self.source, self.node["data"]["node"]), REBUILD_FLOW)
+
+    def test_flow_node_carries_current_component_code(self):
+        self.assertEqual(self.node["data"]["node"]["template"]["code"]["value"],
+                         COMPONENT_PATH.read_text(encoding="utf-8"), REBUILD_FLOW)
+
+    def test_negotiation_graph_is_kept_unchanged(self):
+        nodes = {node["id"]: node for node in self.flow["data"]["nodes"]}
+        for node in self.source["data"]["nodes"]:
+            self.assertEqual(nodes[node["id"]], node)
+        for edge in self.source["data"]["edges"]:
+            self.assertIn(edge, self.flow["data"]["edges"])
+        self.assertNotEqual(self.flow["id"], self.source["id"], "импорт перезаписал бы flow переговоров")
+
+    def test_model_reads_game_result_and_players_and_reports_to_its_chat(self):
+        links = {(edge["source"], edge["target"], edge["data"]["targetHandle"]["fieldName"])
+                 for edge in self.flow["data"]["edges"]}
+        players = [node["id"] for node in self.source["data"]["nodes"] if node["data"]["type"] == "PlayerAgent"]
+        self.assertEqual(len(players), len(ROLES))
+        self.assertLessEqual({("TwoLLMContractGame-main", NODE, "game_result"), (NODE, CHAT, "input_value"),
+                              *((player, NODE, "players") for player in players)}, links)
 
 
 class ComponentBuildTests(unittest.TestCase):
