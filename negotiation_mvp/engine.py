@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 from config import prompts
 
-from .core import Assignment, GameConfig, GameError, State, funding_total, is_complete, merge_round, parse_sets, render_table, score_state
+from .core import Assignment, GameConfig, GameError, LEVER_SPECS, State, funding_total, is_complete, merge_round, parse_sets, render_table, score_state
 from .llm import ChatModel
 
 
@@ -44,7 +44,7 @@ def _drop_unsupported_numeric_sets(speech: str, raw: str, actions: list[Assignme
 
 
 def _closed_schema_sets(raw: str, config: GameConfig, speaker: str, voting: bool) -> str:
-    allowed = {f"participants.{speaker}.vote"} if voting else set(config.required_paths)
+    allowed = {f"participants.{speaker}.vote"} if voting else (set(config.required_paths) | set(config.parameter_paths))
     kept = []
     for line in raw.splitlines():
         match = re.fullmatch(r"SET\s+([a-z][a-z0-9_.]*)\s*=\s*.+", line.strip())
@@ -80,6 +80,9 @@ def _allowed_paths(config: GameConfig, speaker: str, voting: bool) -> str:
         return f"participants.{speaker}.vote = true|false"
     lines = [f"participants.{p.id}.contribution = <integer rubles>" for p in config.players]
     lines += [f"components.{c.id}.responsible = <player id>" for c in config.components]
+    for key, spec in LEVER_SPECS.items():
+        allowed_repr = "|".join(json.dumps(x, ensure_ascii=False) for x in sorted(spec["allowed"], key=str))
+        lines.append(f"parameters.{key} = {allowed_repr}")
     return "\n".join(lines)
 
 
@@ -111,6 +114,32 @@ def _normalize_set_value(path: str, value: object, aliases: dict[str, str]) -> o
         return aliases.get(cleaned.casefold(), cleaned)
     if path.endswith(".vote"):
         return {"true": True, "false": False, "за": True, "против": False}.get(cleaned.casefold(), cleaned)
+    if path.startswith("parameters."):
+        key = path.split(".", 1)[1]
+        if key in LEVER_SPECS:
+            spec = LEVER_SPECS[key]
+            val_str = str(cleaned).casefold()
+            if spec["type"] is bool:
+                if val_str in ("true", "да", "yes", "согласовано", "1"):
+                    return True
+                if val_str in ("false", "нет", "no", "отклонено", "0"):
+                    return False
+            elif key == "plant_mode":
+                if "70" in val_str:
+                    return "70%"
+                if "100" in val_str:
+                    return "100%"
+            elif key == "timeline_months":
+                digits = re.findall(r"\d+", val_str)
+                if digits and int(digits[0]) in (24, 36, 48):
+                    return int(digits[0])
+            elif key == "guilt":
+                if any(w in val_str for w in ("паритет", "обоюд", "shared", "паритетная")):
+                    return "shared"
+                if any(w in val_str for w in ("холдинг", "завод", "holding")):
+                    return "holding"
+                if any(w in val_str for w in ("город", "мэр", "администр", "city")):
+                    return "city"
     if path.endswith(".contribution"):
         match = _MONEY_RE.fullmatch(cleaned)
         if match:

@@ -511,5 +511,87 @@ class CoreTests(unittest.TestCase):
             self.assertIn("## Сообщения, переданные LLM", output.with_name("result_with_prompts.md").read_text(encoding="utf-8"))
 
 
+    def test_parameter_levers_parsing_validation_and_merge(self):
+        sets_text = (
+            'SET parameters.guilt = "shared"\n'
+            'SET parameters.plant_mode = "70%"\n'
+            'SET parameters.tariffs_freeze = true\n'
+            'SET parameters.timeline_months = 24'
+        )
+        actions = parse_sets(sets_text, "administration", CONFIG)
+        self.assertEqual(len(actions), 4)
+        self.assertEqual(actions[0].path, "parameters.guilt")
+        self.assertEqual(actions[0].value, "shared")
+        self.assertEqual(actions[1].value, "70%")
+        self.assertEqual(actions[2].value, True)
+        self.assertEqual(actions[3].value, 24)
+
+        # Invalid param or value raises GameError
+        with self.assertRaises(GameError):
+            parse_sets('SET parameters.unknown_lever = "val"', "administration", CONFIG)
+        with self.assertRaises(GameError):
+            parse_sets('SET parameters.plant_mode = "50%"', "administration", CONFIG)
+
+        # Merge round records parameters and detects conflict
+        state = merge_round(State(), actions, CONFIG)
+        self.assertEqual(state.value("parameters.guilt"), "shared")
+        self.assertEqual(state.value("parameters.plant_mode"), "70%")
+        self.assertFalse(state.conflict("parameters.plant_mode"))
+
+        # Conflicting proposal from industrial
+        conflict_actions = parse_sets('SET parameters.plant_mode = "100%"', "industrial", CONFIG)
+        state2 = merge_round(state, conflict_actions, CONFIG)
+        self.assertTrue(state2.conflict("parameters.plant_mode"))
+        self.assertIn("parameters.plant_mode", state2.conflicts())
+        self.assertIsNone(state2.value("parameters.plant_mode"))
+
+    def test_parameter_normalization_in_converter(self):
+        raw = (
+            'SET parameters.guilt = "паритет"\n'
+            'SET parameters.tariffs_freeze = "да"\n'
+            'SET parameters.tax_relief = "нет"\n'
+            'SET parameters.plant_mode = "70"\n'
+            'SET parameters.timeline_months = "24 месяца"'
+        )
+        normalized = _normalize_converter_sets(raw, CONFIG)
+        self.assertIn('SET parameters.guilt = "shared"', normalized)
+        self.assertIn('SET parameters.tariffs_freeze = true', normalized)
+        self.assertIn('SET parameters.tax_relief = false', normalized)
+        self.assertIn('SET parameters.plant_mode = "70%"', normalized)
+        self.assertIn('SET parameters.timeline_months = 24', normalized)
+
+    def test_multi_factor_scoring_with_levers_and_table_render(self):
+        # 5-player config demo
+        from tests.test_langflow_bridge import DEMO
+        config = GameConfig.from_dict(DEMO)
+        state = State()
+
+        # Without agreed parameters
+        scores_base = score_state(state, config, signed=True)
+
+        # Apply agreed parameters: shared guilt, tariffs freeze, open sensors, plant 70%
+        actions = parse_sets(
+            'SET parameters.guilt = "shared"\n'
+            'SET parameters.tariffs_freeze = true\n'
+            'SET parameters.open_sensors = true\n'
+            'SET parameters.plant_mode = "70%"',
+            "city_administration",
+            config,
+        )
+        state_agreed = merge_round(state, actions, config)
+        scores_agreed = score_state(state_agreed, config, signed=True)
+
+        # Residents score must increase with tariffs frozen and open sensors
+        self.assertGreater(scores_agreed["city_residents"], scores_base["city_residents"])
+        # NGO score must increase with open sensors and 70% plant mode
+        self.assertGreater(scores_agreed["environmental_ngo"], scores_base["environmental_ngo"])
+
+        # Table includes parameter rows
+        table = render_table(state_agreed, config, signed=True)
+        self.assertIn("Условие: Заморозка тарифов ЖКХ", table)
+        self.assertIn("Условие: Режим завода", table)
+        self.assertIn("Да (Администрация)", table)
+
+
 if __name__ == "__main__":
     unittest.main()
