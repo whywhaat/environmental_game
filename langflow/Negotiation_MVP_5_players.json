@@ -2948,7 +2948,7 @@
                 "show": true,
                 "title_case": false,
                 "type": "code",
-                "value": "import os\nfrom pathlib import Path\n\nfrom langchain_core.messages import AIMessage, HumanMessage, SystemMessage\nfrom lfx.custom import Component\nfrom lfx.io import DataInput, ModelInput, Output\nfrom lfx.schema.data import Data\n\nfrom negotiation_mvp.langflow_bridge import run_langflow_game\n\n\ndef _as_text(content):\n    if isinstance(content, str):\n        return content.strip()\n    if isinstance(content, list):\n        return \"\".join(item.get(\"text\", \"\") if isinstance(item, dict) else str(item) for item in content).strip()\n    return str(content).strip()\n\n\ndef _invoke(model, messages):\n    types = {\"system\": SystemMessage, \"user\": HumanMessage, \"assistant\": AIMessage}\n    response = model.invoke([types[item[\"role\"]](content=item[\"content\"]) for item in messages])\n    return _as_text(getattr(response, \"content\", response))\n\n\nclass TwoLLMContractGame(Component):\n    display_name = \"Two LLM Contract Game\"\n    description = \"Последовательные переговоры через общее Python-ядро.\"\n    icon = \"messages-square\"\n    inputs = [\n        DataInput(name=\"settings\", display_name=\"Game Settings\", required=True),\n        DataInput(name=\"players\", display_name=\"Players\", is_list=True, required=True),\n        DataInput(name=\"rag_config\", display_name=\"RAG Config (optional)\", required=False),\n        ModelInput(name=\"converter_model\", display_name=\"SET Converter Model (optional)\", required=False),\n    ]\n    outputs = [Output(name=\"result\", display_name=\"Game Result\", method=\"run_chat\")]\n\n    def run_chat(self) -> Data:\n        settings = self.settings.data\n        players = [item.data for item in self.players]\n        invokers = {player[\"id\"]: (lambda messages, model=player[\"llm\"]: _invoke(model, messages)) for player in players}\n        converter_llm = getattr(self, \"converter_model\", None) or players[0][\"llm\"]\n        invokers[\"__converter__\"] = lambda messages: _invoke(converter_llm, messages)\n        rag_data = getattr(self.rag_config, \"data\", None) if getattr(self, \"rag_config\", None) else None\n        payload = run_langflow_game(settings, players, invokers, Path(os.getenv(\"NEGOTIATION_GAMES_DIR\", \"/app/games\")), rag_config=rag_data)\n        return Data(data={\"result\": payload[\"result\"], \"files\": payload[\"files\"], \"report\": payload[\"report\"]})\n"
+                "value": "import os\nfrom pathlib import Path\n\nfrom langchain_core.messages import AIMessage, HumanMessage, SystemMessage\nfrom lfx.custom import Component\nfrom lfx.io import DataInput, HandleInput, Output\nfrom lfx.schema.data import Data\n\nfrom negotiation_mvp.langflow_bridge import run_langflow_game\n\n\ndef _as_text(content):\n    if isinstance(content, str):\n        return content.strip()\n    if isinstance(content, list):\n        return \"\".join(item.get(\"text\", \"\") if isinstance(item, dict) else str(item) for item in content).strip()\n    return str(content).strip()\n\n\ndef _invoke(model, messages):\n    types = {\"system\": SystemMessage, \"user\": HumanMessage, \"assistant\": AIMessage}\n    response = model.invoke([types[item[\"role\"]](content=item[\"content\"]) for item in messages])\n    return _as_text(getattr(response, \"content\", response))\n\n\nclass TwoLLMContractGame(Component):\n    display_name = \"Two LLM Contract Game\"\n    description = \"Последовательные переговоры через общее Python-ядро.\"\n    icon = \"messages-square\"\n    inputs = [\n        DataInput(name=\"settings\", display_name=\"Game Settings\", required=True),\n        DataInput(name=\"players\", display_name=\"Players\", is_list=True, required=True),\n        DataInput(name=\"rag_config\", display_name=\"RAG Config (optional)\", required=False),\n        HandleInput(name=\"converter_model\", display_name=\"SET Converter Model (optional)\", input_types=[\"LanguageModel\"], required=False),\n    ]\n    outputs = [Output(name=\"result\", display_name=\"Game Result\", method=\"run_chat\")]\n\n    def run_chat(self) -> Data:\n        settings = self.settings.data\n        players = [p.data for p in self.players]\n        invokers = {p[\"id\"]: (lambda msgs, m=p[\"llm\"]: _invoke(m, msgs)) for p in players}\n        converter_llm = getattr(self, \"converter_model\", None) or players[0][\"llm\"]\n        invokers[\"converter\"] = lambda msgs, m=converter_llm: _invoke(m, msgs)\n        rag_data = getattr(self.rag_config, \"data\", None) if getattr(self, \"rag_config\", None) else None\n        payload = run_langflow_game(settings, players, invokers, Path(os.getenv(\"NEGOTIATION_GAMES_DIR\", \"/app/games\")), rag_config=rag_data)\n        return Data(data=payload)\n"
               },
               "is_refresh": true,
               "players": {
@@ -3015,10 +3015,10 @@
                 "value": null
               },
               "converter_model": {
-                "_input_type": "ModelInput",
+                "_input_type": "HandleInput",
                 "name": "converter_model",
                 "display_name": "SET Converter Model (optional)",
-                "type": "LanguageModel",
+                "type": "other",
                 "input_types": [
                   "LanguageModel"
                 ],
@@ -4593,11 +4593,11 @@
         "className": ""
       },
       {
-        "id": "reactflow__edge-LanguageModelComponent-converter{œdataTypeœ:œLanguageModelComponentœ,œidœ:œLanguageModelComponent-converterœ,œnameœ:œmodel_outputœ,œoutput_typesœ:[œLanguageModelœ]}-TwoLLMContractGame-main{œfieldNameœ:œconverter_modelœ,œidœ:œTwoLLMContractGame-mainœ,œinputTypesœ:[œLanguageModelœ],œtypeœ:œLanguageModelœ}",
+        "id": "xy-edge__LanguageModelComponent-converter{œdataTypeœ:œLanguageModelComponentœ,œidœ:œLanguageModelComponent-converterœ,œnameœ:œmodel_outputœ,œoutput_typesœ:[œLanguageModelœ]}-TwoLLMContractGame-main{œfieldNameœ:œconverter_modelœ,œidœ:œTwoLLMContractGame-mainœ,œinputTypesœ:[œLanguageModelœ],œtypeœ:œotherœ}",
         "source": "LanguageModelComponent-converter",
         "target": "TwoLLMContractGame-main",
         "sourceHandle": "{œdataTypeœ:œLanguageModelComponentœ,œidœ:œLanguageModelComponent-converterœ,œnameœ:œmodel_outputœ,œoutput_typesœ:[œLanguageModelœ]}",
-        "targetHandle": "{œfieldNameœ:œconverter_modelœ,œidœ:œTwoLLMContractGame-mainœ,œinputTypesœ:[œLanguageModelœ],œtypeœ:œLanguageModelœ}",
+        "targetHandle": "{œfieldNameœ:œconverter_modelœ,œidœ:œTwoLLMContractGame-mainœ,œinputTypesœ:[œLanguageModelœ],œtypeœ:œotherœ}",
         "data": {
           "sourceHandle": {
             "dataType": "LanguageModelComponent",
@@ -4613,7 +4613,7 @@
             "inputTypes": [
               "LanguageModel"
             ],
-            "type": "LanguageModel"
+            "type": "other"
           }
         },
         "animated": false,

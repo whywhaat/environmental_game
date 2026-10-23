@@ -3,7 +3,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from lfx.custom import Component
-from lfx.io import DataInput, ModelInput, Output
+from lfx.io import DataInput, HandleInput, Output
 from lfx.schema.data import Data
 
 from negotiation_mvp.langflow_bridge import run_langflow_game
@@ -31,16 +31,16 @@ class TwoLLMContractGame(Component):
         DataInput(name="settings", display_name="Game Settings", required=True),
         DataInput(name="players", display_name="Players", is_list=True, required=True),
         DataInput(name="rag_config", display_name="RAG Config (optional)", required=False),
-        ModelInput(name="converter_model", display_name="SET Converter Model (optional)", required=False),
+        HandleInput(name="converter_model", display_name="SET Converter Model (optional)", input_types=["LanguageModel"], required=False),
     ]
     outputs = [Output(name="result", display_name="Game Result", method="run_chat")]
 
     def run_chat(self) -> Data:
         settings = self.settings.data
-        players = [item.data for item in self.players]
-        invokers = {player["id"]: (lambda messages, model=player["llm"]: _invoke(model, messages)) for player in players}
+        players = [p.data for p in self.players]
+        invokers = {p["id"]: (lambda msgs, m=p["llm"]: _invoke(m, msgs)) for p in players}
         converter_llm = getattr(self, "converter_model", None) or players[0]["llm"]
-        invokers["__converter__"] = lambda messages: _invoke(converter_llm, messages)
+        invokers["converter"] = lambda msgs, m=converter_llm: _invoke(m, msgs)
         rag_data = getattr(self.rag_config, "data", None) if getattr(self, "rag_config", None) else None
         payload = run_langflow_game(settings, players, invokers, Path(os.getenv("NEGOTIATION_GAMES_DIR", "/app/games")), rag_config=rag_data)
-        return Data(data={"result": payload["result"], "files": payload["files"], "report": payload["report"]})
+        return Data(data=payload)
