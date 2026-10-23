@@ -1,5 +1,15 @@
 import os
+import sys
 from pathlib import Path
+
+# Ensure project root is in sys.path
+for _candidate in [
+    Path(r"C:\Users\Влад\.gemini\antigravity\scratch\environmental_game"),
+    Path(__file__).resolve().parents[3] if "__file__" in globals() else None,
+    Path.cwd(),
+]:
+    if _candidate and (_candidate / "negotiation_mvp").is_dir() and str(_candidate) not in sys.path:
+        sys.path.insert(0, str(_candidate))
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from lfx.custom import Component
