@@ -74,10 +74,12 @@ class SharedProjectRAG(Component):
         key = getattr(self, 'embedding_api_key', '')
         if hasattr(key, 'get_secret_value'):
             key = key.get_secret_value()
-        key = str(key or os.environ.get('TSARROUTER_API_KEY', '')).strip()
-        if not key:
-            raise ValueError('Введите ключ Царь Роутера в RAG-блоке или задайте TSARROUTER_API_KEY')
-        self.status = f'{collection.count()} фрагментов · {DIMENSION} измерений · доступ по ролям'
+        key = str(key or os.environ.get('TSARROUTER_API_KEY', '') or os.environ.get('OPENAI_API_KEY', '')).strip()
+        if key:
+            self.status = f'{collection.count()} фрагментов · {DIMENSION} измерений · доступ по ролям'
+        else:
+            self.status = f'{collection.count()} фрагментов · локальный режим · доступ по ролям'
         return Data(data={'chroma_path': str(path), 'collection_name': collection_name,
             'embedding_api_key': SecretStr(key), 'embedding_base_url': self.embedding_base_url,
-            'embedding_model': MODEL, 'dimension': DIMENSION, 'top_k': max(1, min(8, int(self.top_k)))})
+            'embedding_model': MODEL, 'dimension': DIMENSION, 'top_k': max(1, min(8, int(self.top_k))),
+            'corpus_b64': CORPUS_B64})

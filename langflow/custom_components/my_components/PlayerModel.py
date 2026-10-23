@@ -1,3 +1,7 @@
+import json
+import re
+from typing import Any
+
 from lfx.base.models.model import LCModelComponent
 from lfx.base.models.unified_models import (
     get_language_model_options,
@@ -8,14 +12,14 @@ from lfx.components.models_and_agents.model_selection import apply_model_overrid
 from lfx.field_typing.constants import LanguageModel
 from lfx.field_typing.range_spec import RangeSpec
 from lfx.inputs.inputs import StrInput
-from lfx.io import FloatInput, ModelInput, MultilineInput, Output, SecretStrInput, SliderInput
+from lfx.io import FloatInput, IntInput, ModelInput, MultilineInput, Output, SecretStrInput, SliderInput
 from lfx.schema.data import Data
 
 
 class PlayerAgent(LCModelComponent):
     model_provider_policy_mode = "delegate"
     display_name = "Player Agent"
-    description = "Defines a player role, economic profile, and language model."
+    description = "Единая нода участника: языковая модель, бюджет и стратегия переговоров."
     icon = "user-check"
     category = "models"
 
@@ -23,21 +27,50 @@ class PlayerAgent(LCModelComponent):
         ModelInput(
             name="model",
             display_name="Language Model",
-            info="Select your model provider",
+            info="Выберите провайдера модели (GigaChat, OpenAI, Ollama, Anthropic и др.)",
             real_time_refresh=True,
             required=True,
         ),
         StrInput(
+            name="player_name",
+            display_name="Имя игрока",
+            info="Отображаемое имя участника (например, Администрация города N, Промышленный холдинг)",
+            required=True,
+            value="",
+        ),
+        IntInput(
+            name="budget_millions",
+            display_name="Бюджет, млн ₽",
+            value=0,
+            info="Физически доступный бюджет участника в миллионах рублей",
+            required=True,
+        ),
+        MultilineInput(
+            name="prompt",
+            display_name="Стратегия и характер агента",
+            info="Инструкция для агента: характер, тактика переговоров, аргументы, красные линии и условия компромисса",
+            required=True,
+            multiline=True,
+            value="Вы представляете интересы своей стороны. Добивайтесь заключения договора, отстаивая свои интересы и не допуская превышения бюджета.",
+        ),
+        StrInput(
+            name="player_id",
+            display_name="ID игрока",
+            info="Идентификатор роли (city_administration, industrial_holding, regional_government, city_residents, environmental_ngo)",
+            required=False,
+            advanced=True,
+        ),
+        StrInput(
             name="model_name",
             display_name="Model Name Override",
-            info="Optional model name override",
+            info="Опциональное переопределение имени модели (например, GigaChat-Pro, qwen3.8-9b-q4)",
             advanced=True,
             load_from_db=False,
         ),
         SecretStrInput(
             name="api_key",
             display_name="API Key",
-            info="Overrides global provider settings.",
+            info="API-ключ провайдера (если не задан в переменных окружения)",
             required=False,
             show=True,
             advanced=True,
@@ -46,65 +79,49 @@ class PlayerAgent(LCModelComponent):
             name="temperature",
             display_name="Temperature",
             value=0.1,
-            info="Controls randomness in responses",
+            info="Степень креативности модели (0.0 — строгая логика, 1.0 — случайность)",
             range_spec=RangeSpec(min=0, max=1, step=0.01),
             advanced=True,
         ),
-        StrInput(
-            name="player_name",
-            display_name="Player name",
-            info="Unique player name",
-            value="",
-            required=True,
+        FloatInput(
+            name="expected_own_share",
+            display_name="Желаемая доля взноса (0–1)",
+            value=0.0,
+            info="Целевая доля участия от 0 до 1 (по умолчанию 0 — минимизировать расходы)",
+            advanced=True,
+            required=False,
         ),
         MultilineInput(
-            name="prompt",
-            display_name="Prompt",
-            info="System prompt/personality for this player.",
-            value="You are a strategic negotiator.",
-            required=True,
-        ),
-        FloatInput(
-            name="money",
-            display_name="Money",
-            info="Initial amount of money physically available to the player.",
-            value=100000,
-            required=True,
-        ),
-        FloatInput(
-            name="min_share",
-            display_name="Minimum Share (%)",
-            info="Below this share the player considers the deal unfavorable.",
-            value=0,
-            required=True,
-        ),
-        FloatInput(
-            name="comfort_share",
-            display_name="Comfort Share (%)",
-            info="Share from which accepting the deal becomes comfortable.",
-            value=0,
-            required=True,
-        ),
-        FloatInput(
-            name="comfort_money",
-            display_name="Comfort Money",
-            info="Preferred amount the player would like to invest.",
-            value=0,
-            required=True,
-        ),
-        FloatInput(
-            name="max_money",
-            display_name="Maximum Money",
-            info="Maximum amount the player is willing to invest.",
-            value=0,
-            required=True,
+            name="desired_responsible",
+            display_name="Желаемые ответственные (JSON)",
+            required=False,
+            value="",
+            info="Опциональный JSON со списком желаемых ответственных (по умолчанию определяются ролью)",
+            advanced=True,
         ),
         MultilineInput(
-            name="intent",
-            display_name="Intent",
-            info="Strategic preference and desired direction of optimization.",
+            name="personal_context",
+            display_name="Базовый контекст роли",
+            required=False,
             value="",
-            required=True,
+            info="Официальный контекст и статус участника в сценарии",
+            advanced=True,
+        ),
+        MultilineInput(
+            name="motivation",
+            display_name="Мотивация",
+            required=False,
+            value="",
+            info="Базовая стратегическая цель участника",
+            advanced=True,
+        ),
+        MultilineInput(
+            name="personal_history",
+            display_name="Личная история (JSON)",
+            required=False,
+            value="",
+            info="Опциональные факты предыстории (основные факты подтягиваются из RAG)",
+            advanced=True,
         ),
     ]
 
@@ -122,77 +139,96 @@ class PlayerAgent(LCModelComponent):
             self.model,
             model_name=getattr(self, "model_name", None),
             provider=getattr(self, "provider", None),
-            user_id=self.user_id,
+            user_id=getattr(self, "user_id", None),
             get_options=get_language_model_options,
         )
         return get_llm(
             model=model,
-            user_id=self.user_id,
+            user_id=getattr(self, "user_id", None),
             api_key=getattr(self, "api_key", None),
             temperature=getattr(self, "temperature", 0.1),
         )
 
     def build_player(self) -> Data:
-        money = float(self.money)
-        min_share = float(self.min_share)
-        comfort_share = float(self.comfort_share)
-        comfort_money = float(self.comfort_money)
-        max_money = float(self.max_money)
+        if hasattr(getattr(self, "model", None), "invoke"):
+            llm = self.model
+        else:
+            llm = self.build_llm()
 
-        if money < 0:
-            raise ValueError("Money cannot be negative.")
+        name = str(getattr(self, "player_name", "") or "").strip()
+        player_id = str(getattr(self, "player_id", "") or "").strip()
+        if not player_id:
+            lower_name = name.lower()
+            slug_map = {
+                "администраци": "city_administration",
+                "промкомплекс": "industrial_holding",
+                "холдинг": "industrial_holding",
+                "регион": "regional_government",
+                "жител": "city_residents",
+                "эко-нко": "environmental_ngo",
+                "нко": "environmental_ngo",
+            }
+            player_id = next((v for k, v in slug_map.items() if k in lower_name), re.sub(r"[^a-z0-9_]+", "_", lower_name).strip("_") or "player")
 
-        if not 0 <= min_share <= 100:
-            raise ValueError("Minimum Share must be between 0 and 100.")
+        desired_raw = getattr(self, "desired_responsible", "") or ""
+        if isinstance(desired_raw, str):
+            desired_raw = desired_raw.strip()
+            desired = json.loads(desired_raw) if desired_raw else {}
+        else:
+            desired = desired_raw or {}
 
-        if not 0 <= comfort_share <= 100:
-            raise ValueError("Comfort Share must be between 0 and 100.")
+        history_raw = getattr(self, "personal_history", "") or ""
+        if isinstance(history_raw, str):
+            history_raw = history_raw.strip()
+            if history_raw:
+                try:
+                    history = json.loads(history_raw)
+                except Exception:
+                    history = [line.strip() for line in history_raw.splitlines() if line.strip()]
+            else:
+                history = []
+        else:
+            history = history_raw or []
 
-        if comfort_share < min_share:
-            raise ValueError(
-                "Comfort Share cannot be less than Minimum Share."
-            )
+        prompt_text = str(getattr(self, "prompt", "") or "").strip()
+        context_text = str(getattr(self, "personal_context", "") or "").strip()
+        if prompt_text and not context_text:
+            context_text = prompt_text
+        elif prompt_text and context_text and prompt_text != context_text:
+            context_text = f"{context_text}\n\n### Стратегия и инструкции:\n{prompt_text}"
+        elif not context_text:
+            context_text = f"Вы представляете {name or player_id} в переговорах."
 
-        if comfort_money < 0:
-            raise ValueError("Comfort Money cannot be negative.")
+        motivation_text = str(getattr(self, "motivation", "") or "").strip()
+        if not motivation_text:
+            motivation_text = f"Защитить интересы стороны {name or player_id} и добиться заключения сбалансированного договора."
 
-        if max_money < 0:
-            raise ValueError("Maximum Money cannot be negative.")
+        share_val = getattr(self, "expected_own_share", 0.0)
+        try:
+            share = float(share_val if share_val not in (None, "") else 0.0)
+        except (ValueError, TypeError):
+            share = 0.0
 
-        if comfort_money > max_money:
-            raise ValueError(
-                "Comfort Money cannot be greater than Maximum Money."
-            )
-
-        if max_money > money:
-            raise ValueError(
-                "Maximum Money cannot be greater than Money."
-            )
-
-        if not str(self.player_name).strip():
-            raise ValueError("Player name cannot be empty.")
-
-        if not str(self.prompt).strip():
-            raise ValueError("Prompt cannot be empty.")
-
-        llm = self.build_llm()
+        budget_m = getattr(self, "budget_millions", 0)
+        try:
+            budget = int(budget_m) * 1_000_000
+        except (ValueError, TypeError):
+            budget = 0
 
         return Data(
             data={
-                "player_name": str(self.player_name).strip(),
+                "id": player_id,
+                "name": name or player_id,
+                "budget": budget,
+                "expected_own_share": share,
+                "desired_responsible": desired,
+                "personal_context": context_text,
+                "motivation": motivation_text,
+                "personal_history": history,
+                "prompt": prompt_text,
                 "llm": llm,
-                "prompt": str(self.prompt).strip(),
-                "money": money,
-                "attrs": {
-                    "min_share": min_share,
-                    "comfort_share": comfort_share,
-                    "comfort_money": comfort_money,
-                    "max_money": max_money,
-                },
-                "intent": str(self.intent).strip(),
             }
         )
 
     def update_build_config(self, build_config: dict, field_value: str, field_name: str | None = None):
-        """Dynamically update build config with user-filtered model options."""
         return handle_model_input_update(self, build_config, field_value, field_name)

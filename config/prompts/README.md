@@ -1,7 +1,0 @@
-# Промпты совещания
-
-Тексты каждой стороны лежат отдельно в `role_admin_prompt_config.py`, `role_holding_prompt_config.py`, `role_ngo_prompt_config.py`, `role_region_prompt_config.py` и `role_residents_prompt_config.py`. [player_prompt_config.py](player_prompt_config.py) содержит общие инструкции ходов участников, [judje_prompt_config.py](judje_prompt_config.py) — речь судьи и последующий разбор, [meeting_prompt_config.py](meeting_prompt_config.py) — регламент, [rag_prompt_config.py](rag_prompt_config.py) — RAG, [predict_prompt_config.py](predict_prompt_config.py) — прогноз, [score_prompt_config.py](score_prompt_config.py) — скоринг. Общий [prompt_config.py](prompt_config.py) только объединяет модули и подставляет переменные. Шаблоны используют `$имя_переменной`; имена переменных менять нельзя без соответствующего изменения кода.
-
-Python компоненты импортируют общий загрузчик; после правки любого модуля перезапустите процесс Langflow. В Docker Compose каталог `config` примонтирован в `/app/config`. Для запуска Langflow иным способом добавьте корень проекта в `PYTHONPATH`.
-
-Узлы Prompt и Player в экспортированном `LF_Agent_RAG.json` хранят собственные копии текста. После изменения `meeting_rules`, `role_*` или `flow_*` выполните `node langflow/sync_judge_flow.js` и повторно импортируйте обновлённый flow в Langflow. Поле инструкции председателя в flow оставлено пустым: по умолчанию оно использует `judge_instruction`; текст в поле перекрывает значение из `prompt_config.py`.

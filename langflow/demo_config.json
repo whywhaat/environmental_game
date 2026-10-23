@@ -1,0 +1,45 @@
+{
+  "max_rounds": 15,
+  "components": [
+    {"id": "water_supply", "name": "Вода и заморозка тарифов", "cost": 50000000},
+    {"id": "independent_monitoring", "name": "Независимый мониторинг", "cost": 20000000},
+    {"id": "reconstruction", "name": "Реконструкция", "cost": 200000000}
+  ],
+  "players": [
+    {
+      "id": "city_administration", "name": "Администрация", "budget": 30000000, "expected_own_share": 0,
+      "desired_responsible": {"water_supply": "industrial_holding", "independent_monitoring": "industrial_holding", "reconstruction": "industrial_holding"},
+      "personal_context": "Вы представляете администрацию города N и отвечаете за интересы жителей. Доступный бюджет на проект — 30 млн рублей. Желаемый собственный взнос 0 рублей — исходная переговорная позиция, а не размер бюджета.",
+      "motivation": "Обеспечить чистую воду без непосильной нагрузки на городской бюджет.",
+      "personal_history": ["Жители жаловались на качество воды и рост тарифов.", "После аварии городская администрация оказалась под давлением жителей.", "Финансовый отдел подтвердил: город может выделить на проект до 30 млн рублей софинансирования."]
+    },
+    {
+      "id": "industrial_holding", "name": "Промкомплекс", "budget": 180000000, "expected_own_share": 0,
+      "desired_responsible": {"water_supply": "city_administration", "independent_monitoring": "city_administration", "reconstruction": "city_administration"},
+      "personal_context": "Вы представляете промышленный холдинг города N. Доступный бюджет на проект — 180 млн рублей. Желаемый собственный взнос 0 рублей — исходная переговорная позиция, а не размер бюджета.",
+      "motivation": "Сохранить производство и ограничить непредсказуемые затраты компании.",
+      "personal_history": ["После аварии жители требуют участия предприятия в решении проблемы воды.", "Руководство выделило для переговоров бюджет 180 млн ₽, но ожидает распределения нагрузки с регионом и городом."]
+    },
+    {
+      "id": "regional_government", "name": "Регион", "budget": 90000000, "expected_own_share": 0,
+      "desired_responsible": {"water_supply": "city_administration", "independent_monitoring": "industrial_holding", "reconstruction": "industrial_holding"},
+      "personal_context": "Вы представляете региональную власть. Доступный бюджет на софинансирование — 90 млн рублей.",
+      "motivation": "Добиться измеримого улучшения экологии и не переложить весь проект на региональный бюджет.",
+      "personal_history": ["Регион получил обращения жителей после аварии.", "Регион готов софинансировать проект в объёме до 90 млн рублей при условии независимого контроля."]
+    },
+    {
+      "id": "city_residents", "name": "Жители", "budget": 0, "expected_own_share": 0,
+      "desired_responsible": {"water_supply": "city_administration", "independent_monitoring": "regional_government", "reconstruction": "industrial_holding"},
+      "personal_context": "Вы представляете жителей города N.",
+      "motivation": "Получить безопасную воду и проверяемый план реконструкции без роста тарифов.",
+      "personal_history": ["Семьи столкнулись с проблемой загрязнённой воды.", "Жители требуют публичных результатов независимых замеров."]
+    },
+    {
+      "id": "environmental_ngo", "name": "Эко-НКО", "budget": 0, "expected_own_share": 0,
+      "desired_responsible": {"water_supply": "city_administration", "independent_monitoring": "regional_government", "reconstruction": "industrial_holding"},
+      "personal_context": "Вы представляете независимую экологическую организацию.",
+      "motivation": "Обеспечить независимый мониторинг и прозрачную ответственность за проект.",
+      "personal_history": ["Организация собирала сообщения о загрязнении и требовала проверок.", "После аварии НКО настаивает на открытой публикации результатов замеров."]
+    }
+  ]
+}
