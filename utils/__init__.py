@@ -1,0 +1,1 @@
+"""Shared calculation utilities."""
