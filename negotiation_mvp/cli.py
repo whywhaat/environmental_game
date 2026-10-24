@@ -8,14 +8,16 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
 
 from .core import GameConfig
 from .engine import run_game
-from .llm import OpenAICompatibleChat, RecordingChat
+from .llm import OpenAICompatibleChat, RecordingChat, SplitChat
 from .report import append_prompts, render_interrupted_report, render_prompt_report, render_report
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     parser = argparse.ArgumentParser(description="Run negotiation MVP with an OpenAI-compatible chat API")
     parser.add_argument("--config", required=True, type=Path, help="Game configuration JSON")
     parser.add_argument("--output", type=Path, help="JSON filename inside this run's directory (default: result.json)")
@@ -35,7 +37,20 @@ def main(argv: list[str] | None = None) -> int:
     prompt_report_path = run_dir / (args.prompt_report.name if args.prompt_report else f"{report_path.stem}_with_prompts.md")
     if prompt_report_path == report_path:
         parser.error("--prompt-report must differ from --report")
-    chat = RecordingChat(OpenAICompatibleChat())
+    converter_client = OpenAICompatibleChat()
+    player_base_url = os.getenv("PLAYER_OPENAI_BASE_URL")
+    client = converter_client
+    if player_base_url:
+        player_api_key = os.getenv("PLAYER_OPENAI_API_KEY")
+        if not player_api_key:
+            parser.error("PLAYER_OPENAI_API_KEY is required with PLAYER_OPENAI_BASE_URL")
+        player_client = OpenAICompatibleChat(
+            base_url=player_base_url,
+            api_key=player_api_key,
+            verify_ssl=os.getenv("PLAYER_OPENAI_SSL_VERIFY", "true").lower() not in {"0", "false", "no"},
+        )
+        client = SplitChat(player_client, converter_client, converter_model)
+    chat = RecordingChat(client)
     try:
         result = run_game(config, chat, player_model, converter_model)
     except Exception as exc:
