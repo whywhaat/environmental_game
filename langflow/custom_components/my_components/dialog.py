@@ -39,5 +39,5 @@ class TwoLLMContractGame(Component):
         players = [item.data for item in self.players]
         invokers = {player["id"]: (lambda messages, model=player["llm"]: _invoke(model, messages)) for player in players}
         invokers["__converter__"] = lambda messages: _invoke(self.converter_model, messages)
-        payload = run_langflow_game(settings, players, invokers, Path(os.getenv("NEGOTIATION_GAMES_DIR", "/app/games")))
+        payload = run_langflow_game(settings, players, invokers, Path(os.getenv("NEGOTIATION_GAMES_DIR", "/app/games")), str(getattr(self.converter_model, "model_name", "__converter__")))
         return Data(data={"result": payload["result"], "files": payload["files"], "report": payload["report"]})
