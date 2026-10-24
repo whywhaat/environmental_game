@@ -38,6 +38,12 @@ def render_report(result: dict[str, Any], config: GameConfig) -> str:
         "**Состав проекта:** " + "; ".join(f"{component.name} — {_money(component.cost)}" for component in config.components) + ".",
         "**Участники:** " + ", ".join(names.values()) + ".",
     ]
+    models = result.get("models")
+    if models:
+        lines.append("**Модели игроков:** " + "; ".join(
+            f"{names[player_id]} — {model}" for player_id, model in models["players"].items()
+        ) + ".")
+        lines.append(f"**Модель конвертера:** {models['converter']}.")
     for round_data in result["rounds"]:
         lines.extend(["", f"## Раунд {round_data['number']}"])
         for speech in round_data["speeches"]:
@@ -83,7 +89,8 @@ def append_prompts(report: str, calls: list[dict[str, Any]]) -> str:
     lines = [report.rstrip(), "", "## Сообщения, переданные LLM", ""]
     for number, call in enumerate(calls, 1):
         recipient = "конвертер" if call["messages"] and call["messages"][0]["content"].startswith("Ты конвертер") else "игрок"
-        lines.extend([f"### Вызов {number} — {recipient}, модель {call['model']}", ""])
+        duration = f" — {call['duration_seconds']:g} с" if "duration_seconds" in call else ""
+        lines.extend([f"### Вызов {number} — {recipient}, модель {call['model']}{duration}", ""])
         for message in call["messages"]:
             lines.extend([f"**{message['role']}**", "", _code_block(message["content"]), ""])
         lines.extend(["**Ответ модели**", "", _code_block(call.get("response", call.get("error", ""))), ""])
