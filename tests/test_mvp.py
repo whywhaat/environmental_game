@@ -173,6 +173,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual([event["kind"] for event in result["session"]].count("table"), 4)
         self.assertEqual([event["kind"] for event in result["session"]].count("clock"), 3)
         report = render_report(result, CONFIG)
+        self.assertIn("**Модели игроков:** Администрация — player; Промкомплекс — player.", report)
+        self.assertIn("**Модель конвертера:** converter.", report)
         self.assertIn("## Раунд 3", report)
         self.assertIn("**Извлечённые SET:**", report)
         self.assertIn("**Решение:** договор принят.", report)
