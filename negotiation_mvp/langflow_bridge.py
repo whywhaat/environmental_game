@@ -26,6 +26,7 @@ def run_langflow_game(
     players: list[dict[str, Any]],
     invoke: dict[str, Callable[[list[dict[str, str]]], str]],
     games_dir: Path,
+    converter_model_name: str | None = None,
 ) -> dict[str, Any]:
     """Validate the graph inputs, run the same engine as CLI, and persist artifacts."""
     raw_config = {"components": settings["components"], "max_rounds": settings["max_rounds"],
@@ -39,6 +40,10 @@ def run_langflow_game(
     chat = RecordingChat(RoutedChat(invoke))
     try:
         result = run_game(config, chat, {player.id: player.id for player in config.players}, "__converter__")
+        result["models"] = {
+            "players": {player["id"]: str(getattr(player.get("llm"), "model_name", player["id"])) for player in players},
+            "converter": converter_model_name or "__converter__",
+        }
     except Exception as exc:
         interrupted = render_interrupted_report(config, exc)
         (run_dir / "result.md").write_text(interrupted, encoding="utf-8")
