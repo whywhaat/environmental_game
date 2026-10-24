@@ -276,4 +276,4 @@ def run_game(config: GameConfig, chat: ChatModel, player_model: str | Mapping[st
     for action in vote_actions:
         state.fields[action.path] = [{"value": action.value, "player": action.player, "seq": action.seq}]
     accepted = sum(vote is True for vote in votes.values()) > len(config.players) / 2 and is_complete(state, config)
-    return {"total_cost": config.total_cost, "rounds": rounds, "final_state": state.to_dict(), "final_table": render_table(state, config, signed=accepted), "final_scores": score_state(state, config, signed=accepted), "votes": votes, "accepted": accepted, "turns": turns, "session": session}
+    return {"total_cost": config.total_cost, "models": {"players": {player.id: model_for(player.id) for player in config.players}, "converter": converter_model}, "rounds": rounds, "final_state": state.to_dict(), "final_table": render_table(state, config, signed=accepted), "final_scores": score_state(state, config, signed=accepted), "votes": votes, "accepted": accepted, "turns": turns, "session": session}
