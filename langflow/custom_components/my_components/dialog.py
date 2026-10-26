@@ -12,6 +12,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 DEFAULT_PROJECT_COST = 270_000_000.0  # 270 млн руб. по умолчанию
 
 
+class GameRunError(RuntimeError):
+    """Ошибка игры с накопленной трассой для диагностики в Langflow."""
+
+    def __init__(self, cause: Exception, debug: dict):
+        self.debug = debug
+        details = json.dumps(debug, ensure_ascii=False, indent=2, default=str)
+        super().__init__(f"Игра прервана: {type(cause).__name__}: {cause}\n\nТрасса запуска:\n{details}")
+
+
 def _get_default_settings() -> dict:
     """Дефолтные параметры сценария (если узел GameSettings не подключен)."""
     return {
@@ -227,6 +236,35 @@ class TwoLLMContractGame(Component):
         )
     ]
 
+    def _invoke_model(self, current: dict, phase: str, turn: int, messages: list):
+        call = {
+            "phase": phase,
+            "turn": turn,
+            "player": current["name"],
+            "messages": [{"role": message.type, "content": str(message.content)} for message in messages],
+        }
+        self._debug_calls.append(call)
+        try:
+            response = current["llm"].invoke(messages)
+        except Exception as exc:
+            call["error"] = f"{type(exc).__name__}: {exc}"
+            raise
+        content = getattr(response, "content", response)
+        call["response"] = content if isinstance(content, str) else str(content)
+        return response
+
+    def _debug_data(self, history: list, state: dict | None) -> dict:
+        return {
+            "calls": self._debug_calls,
+            "initial_state": self._debug_initial_state,
+            "updates": [
+                {"turn": item["turn"], "phase": item["phase"], "player": item["speaker"],
+                 "applied": item["action"].get("applied", []), "state": item["state"]}
+                for item in history
+            ],
+            "last_state": copy.deepcopy(state),
+        }
+
     # Парсинг
 
     @staticmethod
@@ -313,6 +351,7 @@ class TwoLLMContractGame(Component):
                         "value": val_bool,
                         "cost": target_lever.get("cost", 0.0) if val_bool else 0.0,
                         "owner": owner,
+                        "player": speaker,
                     }
                 elif l_type == "int":
                     digits = re.search(r"\d+", raw_val)
@@ -330,6 +369,7 @@ class TwoLLMContractGame(Component):
                         "value": val_int,
                         "cost": target_lever.get("cost", 0.0),
                         "owner": owner,
+                        "player": speaker,
                     }
                 elif l_type == "str":
                     low = raw_val.lower()
@@ -352,6 +392,7 @@ class TwoLLMContractGame(Component):
                         "value": val_str,
                         "cost": target_lever.get("cost", 0.0),
                         "owner": owner,
+                        "player": speaker,
                     }
 
         # 2. Попытка разобрать как финансовый взнос/долю:
@@ -469,13 +510,16 @@ class TwoLLMContractGame(Component):
                 val = act["value"]
                 cost = act.get("cost", 0.0)
                 owner = act["owner"]
+                player = act["player"]
+                if player not in state["players"]:
+                    raise ValueError(f"Нельзя применить параметр '{l_id}': игрок '{player}' отсутствует в состоянии игры")
 
                 state["levers"][l_id] = val
                 if cost > 0:
-                    state["players"][owner]["spent_on_levers"] = cost
+                    state["players"][player]["spent_on_levers"] = cost
                 elif val is False and l_id in state["levers"]:
                     # Если выключили обратно — снимаем списание
-                    state["players"][owner]["spent_on_levers"] = 0.0
+                    state["players"][player]["spent_on_levers"] = 0.0
 
                 applied_log.append({
                     "kind": "LEVER",
@@ -1131,7 +1175,7 @@ class TwoLLMContractGame(Component):
 
             prompt += "\n\n" + self._rag_context(speaker, current["profile"], history, 1)
 
-            response = current["llm"].invoke([
+            response = self._invoke_model(current, "Вступление", turn_counter, [
                 SystemMessage(content=system_message),
                 HumanMessage(content=prompt),
             ])
@@ -1226,7 +1270,7 @@ class TwoLLMContractGame(Component):
 
             prompt += "\n\n" + self._rag_context(speaker, current["profile"], history, 2)
 
-            response = current["llm"].invoke([
+            response = self._invoke_model(current, "Переговоры", turn_counter, [
                 SystemMessage(content=system_message),
                 HumanMessage(content=prompt),
             ])
@@ -1323,7 +1367,7 @@ class TwoLLMContractGame(Component):
                 "Если ты не можешь увеличить взнос, подтверди свою окончательную позицию через SPEAK."
             )
 
-            response = current["llm"].invoke([
+            response = self._invoke_model(current, "Последний раунд", turn_counter, [
                 SystemMessage(content=system_message),
                 HumanMessage(content=prompt),
             ])
@@ -1379,7 +1423,7 @@ class TwoLLMContractGame(Component):
                 f"Соглашение будет принято, если наберет не менее {majority_threshold} из {num_players} голосов при отсутствии дефицита бюджета."
             )
 
-            response = current["llm"].invoke([
+            response = self._invoke_model(current, "Голосование", turn_counter, [
                 SystemMessage(content=system_message),
                 HumanMessage(content=prompt),
             ])
@@ -1462,22 +1506,22 @@ class TwoLLMContractGame(Component):
     # ТОЧКА ВХОДА СИМУЛЯЦИИ 
     def run_chat(self) -> Data:
         self._rag_audit = []
-        players, names, state, settings_data = self._init_session()
-        rules = str(getattr(self, "rules_prompt", "") or "").strip()
-        max_turns = max(5, int(getattr(self, "turns", 15) or 15))
-
-        total_cost = float(settings_data.get("total_cost", DEFAULT_PROJECT_COST))
-        levers_config = settings_data.get("levers") or _get_default_settings()["levers"]
-        max_turns = max(5, int(settings_data.get("max_rounds") or getattr(self, "turns", 15) or 15))
-
+        self._debug_calls = []
+        self._debug_initial_state = None
         history = []
-        turn_counter = 0
+        state = None
+        try:
+            players, names, state, settings_data = self._init_session()
+            self._debug_initial_state = copy.deepcopy(state)
+            rules = str(getattr(self, "rules_prompt", "") or "").strip()
+            total_cost = float(settings_data.get("total_cost", DEFAULT_PROJECT_COST))
+            levers_config = settings_data.get("levers") or _get_default_settings()["levers"]
+            max_turns = max(5, int(settings_data.get("max_rounds") or getattr(self, "turns", 15) or 15))
 
-        # ФАЗА 1: Вступительные заявления сторон
-        turn_counter = self._run_phase1(players, state, history, rules, turn_counter, levers_config, total_cost)
-
-        # ФАЗА 2: Переговоры и согласование условий (интерактивный торг)
-        turn_counter = self._run_phase2(players, state, history, rules, turn_counter, max_turns, levers_config, total_cost)
-
-        # ФАЗА 3: Финальное поименное голосование и протокол
-        return self._run_phase3(players, state, history, turn_counter, levers_config, total_cost)
+            turn_counter = self._run_phase1(players, state, history, rules, 0, levers_config, total_cost)
+            turn_counter = self._run_phase2(players, state, history, rules, turn_counter, max_turns, levers_config, total_cost)
+            result = self._run_phase3(players, state, history, turn_counter, levers_config, total_cost)
+            result.data["debug"] = self._debug_data(history, state)
+            return result
+        except Exception as exc:
+            raise GameRunError(exc, self._debug_data(history, state)) from exc
