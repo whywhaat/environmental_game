@@ -10,6 +10,8 @@ import zlib
 from pathlib import Path
 from typing import Any
 
+from .rag_policy import search_enabled
+
 ROLE_MAP = {
     # Participant IDs from demo_config.json / example_config.json
     "city_administration": "admin",
@@ -88,9 +90,10 @@ class RAGRetriever:
         if not records:
             return []
 
-        visible = [r for r in records if role in r.get("audience", [])]
+        visible = [r for r in records if role in r.get("audience", []) and search_enabled(r)]
         if not visible:
-            visible = records
+            return []
+        allowed_records = {record["chunk_id"]: record for record in visible}
 
         api_key = self.config.get("embedding_api_key", "")
         if hasattr(api_key, "get_secret_value"):
@@ -120,14 +123,17 @@ class RAGRetriever:
                     res = coll.query(
                         query_embeddings=[vec],
                         n_results=self.top_k,
-                        where={"visible_" + role: True},
+                        where={"$and": [{"visible_" + role: True}, {"search_enabled": True}]},
                         include=["documents", "metadatas"],
                     )
                     chunks = []
                     for cid, doc, meta in zip(res["ids"][0], res["documents"][0], res["metadatas"][0]):
+                        record = allowed_records.get(cid)
+                        if record is None or not search_enabled(meta):
+                            continue
                         chunks.append({
                             "chunk_id": cid,
-                            "text": doc,
+                            "text": record["text"],
                             "document_title": meta.get("document_title", ""),
                             "section_title": meta.get("section_title", ""),
                             "verification_status": meta.get("verification_status", ""),
