@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .catalog import (ACHIEVED, COMPONENT_LABELS, FAILED, MOMENT_LABELS, PARTLY, ROLE_LABELS, SUBSYSTEM_LABELS,
-                      VOTE_LABELS, WATER, WATER_MAX_MONTHS)
+from .catalog import (ACHIEVED, CONDITIONS, FAILED, GUILT, GUILT_LABELS, HOLDING, MOMENT_LABELS, PARTLY, PLANT_MODE,
+                      RECONSTRUCTION_LABEL, ROLE_LABELS, SUBSYSTEM_LABELS, TARIFFS, TIMELINE, VOTE_LABELS, WATER,
+                      WATER_MAX_MONTHS)
 
 MLN = 1_000_000
 
@@ -49,12 +50,39 @@ def events(result: dict[str, Any]) -> str:
     return "; ".join(happened)
 
 
+def condition_value(condition: str, value: Any) -> str:
+    if condition == TIMELINE:
+        return f"{value} мес."
+    if condition == GUILT:
+        return GUILT_LABELS[value]
+    if isinstance(value, bool):
+        return "включено" if value else "не включено"
+    return str(value)
+
+
+def condition_execution(result: dict[str, Any], condition: str) -> str:
+    if condition == GUILT:
+        return "решение: действует, если протокол принят"
+    if condition == TIMELINE:
+        return "срок реконструкции"
+    return result["execution"]["conditions"].get(condition, "—")
+
+
 def temporary_measures(result: dict[str, Any]) -> str:
-    level = result["execution"]["components"][WATER]
-    owner = result["protocol"]["responsible"][WATER]
-    who = f" (отвечает: {ROLE_LABELS[owner]})" if owner else ""
-    return f"подвоз воды и заморозка тарифов выполнены: {level}{who}; действуют до ввода очистных, " \
-           f"не дольше {WATER_MAX_MONTHS // 12} лет"
+    conditions = result["execution"]["conditions"]
+    water = conditions.get(WATER, "не включена")
+    tariffs = conditions.get(TARIFFS, "не включена")
+    return f"гарантия питьевой воды — {water}, подвоз до ввода очистных, не дольше {WATER_MAX_MONTHS // 12} лет; " \
+           f"заморозка тарифов на время работ — {tariffs}"
+
+
+def protocol_conditions(result: dict[str, Any]) -> str:
+    conditions = result["protocol"]["conditions"]
+    included = [f"{CONDITIONS[condition]['label'][0].lower()}{CONDITIONS[condition]['label'][1:]} — {level}"
+                for condition, level in result["execution"]["conditions"].items()]
+    return (f"срок реконструкции {conditions[TIMELINE]} мес.; режим работы комбината {conditions[PLANT_MODE]}; "
+            f"вина за аварию {GUILT_LABELS[conditions[GUILT]]}; "
+            + ("включены: " + ", ".join(included) if included else "других условий не включено"))
 
 
 def cost_split(result: dict[str, Any]) -> str:
@@ -80,10 +108,14 @@ def render_report(result: dict[str, Any]) -> str:
         amount = protocol["contributions"].get(role)
         lines.append(f"| {label} | {VOTE_LABELS[protocol['votes'][role]]} | "
                      f"{mln(amount) if amount else '—'} | {execution['contributions'].get(role, '—')} |")
-    lines += ["", "| Компонент сметы | Ответственный | Исполнение |", "| --- | --- | --- |"]
-    for component, label in COMPONENT_LABELS.items():
-        owner = protocol["responsible"][component]
-        lines.append(f"| {label} | {ROLE_LABELS[owner] if owner else '—'} | {execution['components'][component]} |")
+    lines += ["", "| Условие протокола | Значение | Владелец | Исполнение |", "| --- | --- | --- | --- |",
+              f"| {RECONSTRUCTION_LABEL} | срок {protocol['conditions'][TIMELINE]} мес. | {ROLE_LABELS[HOLDING]} | "
+              f"{execution['reconstruction']} |"]
+    for condition, info in CONDITIONS.items():
+        if condition == TIMELINE:
+            continue
+        lines.append(f"| {info['label']} | {condition_value(condition, protocol['conditions'][condition])} | "
+                     f"{ROLE_LABELS[info['owner']]} | {condition_execution(result, condition)} |")
 
     state = result["state"]
     headers = [MOMENT_LABELS[moment] + (f" ({state[moment]['month']}-й мес.)" if moment == "commissioning"
@@ -113,8 +145,8 @@ def render_report(result: dict[str, Any]) -> str:
     lines += ["", "## Без вклада роли", "", "| Если бы не выполнила свои обязательства | Исход |", "| --- | --- |"]
     lines += [f"| {ROLE_LABELS[role]} | {name} |" for role, name in result["explanation"]["without_role"].items()]
     lines += ["", "## Допущения", "",
-              "Пороги правил и коэффициенты исполнения — наша формализация, требуют согласования с заказчицей. "
-              f"Обещанный срок ввода очистных — {result['promised_months']} мес., в игре он не обсуждается. "
+              "Пороги правил, коэффициенты исполнения и влияние условий протокола — наша формализация, требуют "
+              "согласования с заказчицей. "
               "Прогноз — учебная гипотеза, а не прогноз по реальной реке."]
     if result["warnings"]:
         lines += ["", "## Предупреждения", ""] + [f"- {warning}" for warning in result["warnings"]]
@@ -125,6 +157,7 @@ def render_herald_prompt(result: dict[str, Any]) -> str:
     outcome, state = result["outcome"], result["state"]
     year_10 = state["year_10"]["subsystems"]
     facts = [f"Исход: «{outcome['name']}». {outcome['description']}",
+             f"Условия протокола: {protocol_conditions(result)}.",
              f"Сроки: {terms(result)}.",
              f"Распределение затрат: {cost_split(result)}."]
     for moment, label in MOMENT_LABELS.items():

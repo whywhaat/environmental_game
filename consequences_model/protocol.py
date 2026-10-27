@@ -1,22 +1,23 @@
-"""Адаптер: итог игры ядра переговоров → Протокол."""
+"""Адаптер: итог игры Влада → Протокол."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from .catalog import COMPONENT_LABELS, INDEPENDENT_MONITORS, MONITORING, NGO, ROLE_LABELS, WITHOUT_MEANS
+from .catalog import (CONDITION_DEFAULTS, CONDITIONS, GAME_VOTES, GUILT, GUILT_LABELS, PLANT_MODE, PLANT_MODES,
+                      PLANT_REDUCED, ROLE_LABELS, SWITCHES, TIMELINE, TIMELINE_MONTHS)
 
 
 @dataclass(frozen=True)
 class Protocol:
-    total_cost: int
-    contributions: dict[str, int]
-    responsible: dict[str, str | None]
+    total_cost: float
+    contributions: dict[str, float]
+    conditions: dict[str, Any]
     votes: dict[str, bool | None]
     accepted: bool
-    budgets: dict[str, int] = field(default_factory=dict)
+    budgets: dict[str, float] = field(default_factory=dict)
+    spent: dict[str, float] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default=())
 
     def supports(self, role: str) -> bool:
@@ -24,61 +25,82 @@ class Protocol:
         return self.votes[role] is True
 
     @property
-    def monitoring_is_independent(self) -> bool:
-        """Учебник, табл. 4: независимая лаборатория, а не «своя»."""
-        return self.responsible[MONITORING] in INDEPENDENT_MONITORS
+    def included(self) -> list[str]:
+        """Условия, которые стали обязательствами владельцев: включённые «да/нет» и режим комбината 70%."""
+        return [condition for condition in CONDITIONS
+                if (condition in SWITCHES and self.conditions[condition] is True)
+                or (condition == PLANT_MODE and self.conditions[condition] == PLANT_REDUCED)]
 
-    def lacks_means(self, component: str) -> bool:
-        """Методичка: у жителей и НКО нет денег и полномочий строить и возить воду; контроль — область НКО."""
-        owner = self.responsible[component]
-        return owner in WITHOUT_MEANS and not (component == MONITORING and owner == NGO)
+    @property
+    def promised_months(self) -> int:
+        return int(self.conditions[TIMELINE])
 
     @property
     def credit(self) -> list[str]:
-        """Роли, чей взнос больше бюджета: превышение покрыто кредитом."""
-        return [role for role, amount in self.contributions.items()
-                if role in self.budgets and amount > self.budgets[role]]
+        """Роли, чей взнос вместе с расходами на условия больше бюджета: превышение покрыто кредитом."""
+        return [role for role in ROLE_LABELS if role in self.budgets
+                and self.contributions.get(role, 0) + self.spent.get(role, 0) > self.budgets[role]]
 
 
-def read_protocol(game_result: dict[str, Any], players: list[dict[str, Any]] | None = None) -> Protocol:
-    """Принимает Data.data оркестратора ({"result": ...}) или голый result.json.
+def valid(condition: str, value: Any) -> bool:
+    if condition == TIMELINE:
+        return isinstance(value, int) and not isinstance(value, bool) and \
+            TIMELINE_MONTHS[0] <= value <= TIMELINE_MONTHS[1]
+    if condition == PLANT_MODE:
+        return value in PLANT_MODES
+    if condition == GUILT:
+        return value in GUILT_LABELS
+    return isinstance(value, bool)
 
-    players — профили игроков с бюджетами; без них правила о кредите не срабатывают.
-    """
-    result = game_result["result"] if "result" in game_result else game_result
-    fields = result["final_state"]["fields"]
+
+def read_protocol(game_result: dict[str, Any]) -> Protocol:
+    """Принимает Data.data оркестратора игры Влада или тот же объект, сохранённый в JSON."""
     warnings: list[str] = []
+    roles: dict[str, str] = {}  # имя игрока → роль
+    budgets = {}
+    for profile in game_result.get("players") or []:
+        if profile.get("id") not in ROLE_LABELS:
+            warnings.append(f"Неизвестная роль {profile.get('id')} у игрока «{profile.get('name')}»: "
+                            "игрок не учитывается.")
+            continue
+        roles[profile["name"]] = profile["id"]
+        if profile.get("budget") is not None:
+            budgets[profile["id"]] = profile["budget"]
 
-    def value(path: str) -> Any:
-        records = fields.get(path) or []
-        distinct = {json.dumps(record["value"], sort_keys=True) for record in records}
-        if len(distinct) > 1:
-            warnings.append(f"Конфликт в поле {path}: обязательство считается незаявленным.")
-            return None
-        return records[0]["value"] if records else None
+    def role_of(name: str) -> str | None:
+        if name not in roles:
+            warnings.append(f"Неизвестный игрок «{name}»: его взнос и голос не учитываются.")
+        return roles.get(name)
 
-    contributions = {}
-    for role in ROLE_LABELS:
-        amount = value(f"participants.{role}.contribution")
-        if amount:
-            contributions[role] = amount
-    responsible = {}
-    for component in COMPONENT_LABELS:
-        path = f"components.{component}.responsible"
-        owner = value(path)
-        if owner is not None and owner not in ROLE_LABELS:
-            warnings.append(f"Неизвестная роль {owner} в поле {path}: компонент без ответственного.")
-            owner = None
-        responsible[component] = owner
-    for path in fields:
-        kind, ident = path.split(".")[:2]
-        if kind == "components" and ident not in COMPONENT_LABELS:
-            warnings.append(f"Неизвестный компонент {ident}: в прогнозе не учитывается.")
-        if kind == "participants" and ident not in ROLE_LABELS:
-            warnings.append(f"Неизвестная роль {ident} в поле {path}: взнос не учитывается.")
-    # True — «за», False — «против», None — воздержался (ядро пишет None, если участник не проголосовал).
-    raw_votes = result.get("votes") or {}
-    votes = {role: raw_votes.get(role) if raw_votes.get(role) in (True, False) else None for role in ROLE_LABELS}
-    budgets = {player["id"]: player["budget"] for player in players or [] if player.get("id") in ROLE_LABELS}
-    return Protocol(result["total_cost"], contributions, responsible, votes,
-                    bool(result.get("accepted")), budgets, tuple(warnings))
+    state = game_result["state"]
+    contributions, spent = {}, {}
+    for name, record in (state.get("players") or {}).items():
+        role = role_of(name)
+        if role and record.get("contribution"):
+            contributions[role] = record["contribution"]
+        if role and record.get("spent_on_levers"):
+            spent[role] = record["spent_on_levers"]
+
+    levers = state.get("levers") or {}
+    conditions = {}
+    for condition, default in CONDITION_DEFAULTS.items():
+        value = levers.get(condition, default)
+        if not valid(condition, value):
+            warnings.append(f"Недопустимое значение {value!r} условия «{CONDITIONS[condition]['label']}»: "
+                            "взято значение по умолчанию.")
+            value = default
+        conditions[condition] = value
+    for condition in levers:
+        if condition not in CONDITIONS:
+            warnings.append(f"Неизвестное условие {condition}: в прогнозе не учитывается.")
+
+    # Игрок без записи о голосе считается воздержавшимся.
+    votes: dict[str, bool | None] = {role: None for role in ROLE_LABELS}
+    for record in (game_result.get("voting_summary") or {}).get("records") or []:
+        role = role_of(record.get("player"))
+        if role:
+            votes[role] = GAME_VOTES.get(record.get("vote"))
+
+    return Protocol(game_result["total_cost"], contributions, conditions, votes,
+                    bool(game_result.get("consensus_reached")), budgets, spent,
+                    tuple(dict.fromkeys(warnings)))

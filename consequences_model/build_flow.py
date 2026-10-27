@@ -1,6 +1,6 @@
-"""Собирает свой flow: граф переговоров + узел «Модель последствий».
+"""Собирает свой flow: граф игры + узел «Модель последствий».
 
-Граф переговоров берётся из langflow/Negotiation_MVP_5_players.json без изменений: в нём ничего не
+Граф игры (ветка Влада) берётся из langflow/Negotiation_MVP_5_players.json без изменений: в нём ничего не
 правится, только добавляются узел модели последствий, его ChatOutput и связи. Шаблон узла строит lfx
 по собранному файлу компонента, поэтому сначала пересоберите компонент (build_component), затем flow:
 
@@ -24,7 +24,7 @@ ORCHESTRATOR = "TwoLLMContractGame-main"
 NODE = "ConsequencesModel-main"
 CHAT = "ChatOutput-consequences"
 FLOW_NAME = "Negotiation MVP + модель последствий"
-FLOW_DESCRIPTION = "Переговоры пяти участников и прогноз модели последствий: город N через 10 лет."
+FLOW_DESCRIPTION = "Общественные слушания пяти участников и прогноз модели последствий: город N через 10 лет."
 
 
 def component_template(code: str) -> dict[str, Any]:
@@ -79,14 +79,13 @@ def build_flow(source: dict[str, Any], template: dict[str, Any]) -> dict[str, An
                 "data": {"sourceHandle": source_handle, "targetHandle": target_handle},
                 "animated": False, "className": "", "selected": False}
 
-    players = [node["id"] for node in nodes if node["data"]["type"] == "PlayerAgent"]
+    # Профили игроков и условия протокола приходят в итоге игры: модели нужна одна связь от оркестратора.
     flow["data"]["edges"].extend([
         edge(ORCHESTRATOR, "result", NODE, "game_result"),
-        *(edge(player, "player", NODE, "players") for player in players),
         edge(NODE, "report", CHAT, "input_value"),
     ])
-    # Свой id, чтобы импорт не перезаписал flow переговоров, и тот же при каждой пересборке.
-    flow.update({"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source['id']}/consequences")),
+    # Свой id, чтобы импорт не перезаписал flow игры, и тот же при каждой пересборке (у flow Влада id нет).
+    flow.update({"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source.get('id') or source['name']}/consequences")),
                  "name": FLOW_NAME, "description": FLOW_DESCRIPTION})
     return flow
 

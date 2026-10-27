@@ -5,11 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from lfx.custom import Component
-from lfx.io import DataInput, IntInput, Output
+from lfx.io import DataInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
-from .catalog import DEFAULT_PROMISED_MONTHS
 from .model import forecast
 
 
@@ -20,11 +19,7 @@ class ConsequencesModel(Component):
 
     inputs = [
         DataInput(name="game_result", display_name="Game Result", required=True,
-                  info="Выход оркестратора игры."),
-        DataInput(name="players", display_name="Players", is_list=True, required=False,
-                  info="Профили игроков: из них берутся бюджеты, чтобы видеть кредиты."),
-        IntInput(name="promised_months", display_name="Обещанный срок ввода очистных, мес.",
-                 value=DEFAULT_PROMISED_MONTHS, info="В игре срок не обсуждается; это допущение модели."),
+                  info="Выход оркестратора игры: взносы, условия протокола, голоса и профили игроков."),
     ]
     outputs = [
         Output(name="forecast", display_name="Прогноз", method="build_forecast"),
@@ -34,8 +29,7 @@ class ConsequencesModel(Component):
 
     def _forecast(self) -> dict[str, Any]:
         # Прогноз дешёвый и детерминированный: считаем на каждый выход, без кэша между запусками.
-        players = [item.data for item in (self.players or [])]
-        return forecast(self.game_result.data, players, int(self.promised_months))
+        return forecast(self.game_result.data)
 
     def build_forecast(self) -> Data:
         return Data(data=self._forecast())
