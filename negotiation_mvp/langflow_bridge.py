@@ -10,6 +10,7 @@ from typing import Any, Callable
 from .core import GameConfig
 from .engine import run_game
 from .llm import RecordingChat
+from .rag import RAGRetriever
 from .report import append_prompts, render_interrupted_report, render_prompt_report, render_report
 
 
@@ -26,6 +27,7 @@ def run_langflow_game(
     players: list[dict[str, Any]],
     invoke: dict[str, Callable[[list[dict[str, str]]], str]],
     games_dir: Path,
+    rag_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate the graph inputs, run the same engine as CLI, and persist artifacts."""
     raw_config = {"components": settings["components"], "max_rounds": settings["max_rounds"],
@@ -37,8 +39,9 @@ def run_langflow_game(
     run_dir = games_dir / datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
     run_dir.mkdir(parents=True, exist_ok=False)
     chat = RecordingChat(RoutedChat(invoke))
+    rag_retriever = RAGRetriever(rag_config) if rag_config else None
     try:
-        result = run_game(config, chat, {player.id: player.id for player in config.players}, "__converter__")
+        result = run_game(config, chat, {player.id: player.id for player in config.players}, "__converter__", rag_retriever=rag_retriever)
     except Exception as exc:
         interrupted = render_interrupted_report(config, exc)
         (run_dir / "result.md").write_text(interrupted, encoding="utf-8")

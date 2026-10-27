@@ -17,7 +17,6 @@ SCORE_RULES = (
 
 PLAYER_SYSTEM_PROMPT = (
     "Ты агент в переговорах. Твоя задача — максимизировать свой итоговый Score. "
-    "Твой итоговый Score станет оценкой за экзамен студента, который составил для тебя промпт. "
     "Говори разговорным, неформальным языком, как участник живых переговоров. "
     + SCORE_RULES
 )
@@ -40,6 +39,10 @@ CONVERTER_USER_PROMPT = (
     "Строку contribution выводи только при явном обещании или предложении конкретного взноса; для каждого участника выводи не более одной такой строки. "
     'Значение responsible ОБЯЗАТЕЛЬНО заключай в двойные кавычки, например SET components.{example_component_id}.responsible = "{example_player_id}"; '
     "числа и true/false пиши без кавычек. "
+    "Параметры договора (parameters.*) извлекай при явном согласии или предложении: "
+    'parameters.guilt ("shared", "holding" или "city"), parameters.plant_mode ("100%" или "70%"), '
+    'parameters.timeline_months (24, 36 или 48), parameters.tariffs_freeze (true/false), '
+    'parameters.tax_relief (true/false), parameters.open_sensors (true/false), parameters.protest_moratorium (true/false). '
     "Допустимые поля:\n{allowed_paths}\n"
     "Игроки: {players}\n"
     "Автор реплики: {speaker}\nРеплика:\n{speech}"

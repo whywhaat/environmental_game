@@ -17,8 +17,9 @@ class BridgeTests(unittest.TestCase):
         nodes = {node["id"]: node for node in flow["data"]["nodes"]}
         edges = flow["data"]["edges"]
         self.assertEqual(sum(node["data"]["type"] == "PlayerAgent" for node in nodes.values()), 5)
-        self.assertEqual(sum(node["data"]["type"] == "OpenAICompatibleModel" for node in nodes.values()), 6)
-        self.assertEqual(len(edges), 14)
+        self.assertEqual(sum(node["data"]["type"] == "SharedProjectRAG" for node in nodes.values()), 1)
+        self.assertEqual(sum(node["data"]["type"] == "LanguageModelComponent" for node in nodes.values()), 1)
+        self.assertEqual(len(edges), 10)
         for node in nodes.values():
             if node["data"]["type"] != "ChatOutput":
                 self.assertIn(node["data"]["selected_output"], [item["name"] for item in node["data"]["node"]["outputs"]])
@@ -32,7 +33,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(config.total_cost, 270_000_000)
         self.assertEqual(len(config.players), 5)
         state = merge_round(State(), parse_sets("SET participants.city_residents.contribution = 27000000", "city_residents", config), config)
-        self.assertAlmostEqual(score_state(state, config)["city_residents"], 24.7)
+        self.assertAlmostEqual(score_state(state, config)["city_residents"], 40.9)
 
     def test_shared_funding_score_with_no_player_budget(self):
         config = GameConfig.from_dict({**DEMO, "players": [{**player, "budget": 0} for player in DEMO["players"]]})
@@ -66,6 +67,51 @@ class BridgeTests(unittest.TestCase):
             files = list(Path(temp).rglob("*"))
             self.assertFalse(any(path.name == "result.json" for path in files))
             self.assertEqual(len([path for path in files if path.suffix == ".md"]), 2)
+
+    def test_rag_retrieval_and_integration(self):
+        from negotiation_mvp.rag import RAGRetriever
+        retriever = RAGRetriever()
+        ctx_admin = retriever.get_context("city_administration", 1, "очистные сооружения")
+        self.assertIn("СПРАВКА ИЗ БАЗЫ ПРОЕКТА (RAG)", ctx_admin)
+        self.assertIn("[", ctx_admin)
+        self.assertGreater(len(retriever.audit), 0)
+
+        received_messages = []
+        def capturing_invoke(messages):
+            received_messages.append(messages)
+            return "Без изменений."
+
+        invoke = {player["id"]: capturing_invoke for player in DEMO["players"]}
+        invoke["__converter__"] = lambda messages: "NO_CHANGES"
+        with tempfile.TemporaryDirectory() as temp:
+            output = run_langflow_game({**DEMO, "max_rounds": 1}, DEMO["players"], invoke, Path(temp), rag_config={"top_k": 2})
+            self.assertTrue(len(output["result"]["rag_audit"]) > 0)
+            has_rag = any(
+                any("СПРАВКА ИЗ БАЗЫ ПРОЕКТА (RAG)" in m["content"] for m in call)
+                for call in received_messages
+            )
+            self.assertTrue(has_rag)
+
+    def test_simplified_player_config_with_defaults(self):
+        simplified = {
+            "max_rounds": 1,
+            "components": DEMO["components"],
+            "players": [
+                {"id": "admin", "name": "Администрация", "budget": 30_000_000, "prompt": "Добивайся выгодного соглашения."},
+                {"id": "holding", "name": "Холдинг", "budget": 180_000_000, "prompt": "Ограничь свои расходы."},
+            ]
+        }
+        config = GameConfig.from_dict(simplified)
+        self.assertEqual(len(config.players), 2)
+        self.assertEqual(config.players[0].expected_own_share, 0.0)
+        self.assertEqual(set(config.players[0].desired_responsible), config.component_ids)
+        self.assertEqual(config.players[0].personal_history, ())
+        self.assertIn("Добивайся выгодного соглашения", config.players[0].personal_context)
+
+        invokers = {"admin": lambda m: "Без изменений.", "holding": lambda m: "Без изменений.", "__converter__": lambda m: "NO_CHANGES"}
+        with tempfile.TemporaryDirectory() as temp:
+            output = run_langflow_game(simplified, simplified["players"], invokers, Path(temp))
+            self.assertEqual(len(output["result"]["rounds"]), 1)
 
 
 if __name__ == "__main__":

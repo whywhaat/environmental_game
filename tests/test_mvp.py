@@ -43,7 +43,7 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(GameError):
             sets("industrial", "SET components.timeline.months = 12")
 
-    def test_old_value_conflicts_and_conflict_has_no_memory(self):
+    def test_conflicts_persist_across_rounds_until_consensus(self):
         path = "components.water_supply.responsible"
         first = merge_round(State(), sets("industrial", 'SET components.water_supply.responsible = "industrial"'), CONFIG)
         repeated = merge_round(first, sets("industrial", 'SET components.water_supply.responsible = "industrial"', 2), CONFIG)
@@ -53,9 +53,15 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(changed.conflict(path))
         self.assertEqual([r["value"] for r in changed.records(path)], ["industrial", "administration"])
         self.assertIn("Администрация", render_table(changed, CONFIG))
-        resolved = merge_round(changed, sets("industrial", 'SET components.water_supply.responsible = "industrial"', 4), CONFIG)
+        # Conflict does not magically disappear when industrial merely re-asserts its proposal
+        still_conflicted = merge_round(changed, sets("industrial", 'SET components.water_supply.responsible = "industrial"', 4), CONFIG)
+        self.assertTrue(still_conflicted.conflict(path))
+        self.assertEqual(len(still_conflicted.records(path)), 2)
+        # Conflict resolves only when administration accepts or agrees
+        resolved = merge_round(still_conflicted, sets("administration", 'SET components.water_supply.responsible = "industrial"', 5), CONFIG)
+        self.assertFalse(resolved.conflict(path))
         self.assertEqual(resolved.value(path), "industrial")
-        self.assertEqual(len(resolved.records(path)), 1)
+        self.assertEqual(len(resolved.records(path)), 2)
 
     def test_same_round_conflict_and_missing_finance_has_shared_penalty(self):
         state = merge_round(State(), sets("administration", "SET participants.administration.contribution = 50000000") + sets("industrial", "SET participants.administration.contribution = 10000000", 2), CONFIG)
@@ -71,6 +77,19 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(score_state(excess, CONFIG)["industrial"], 50)
         self.assertEqual(score_state(full, CONFIG, signed=True)["industrial"], 100)
         self.assertEqual(score_state(excess, CONFIG)["administration"], 0)
+
+    def test_self_responsibility_allowed_and_rewarded(self):
+        raw = json.loads((Path(__file__).resolve().parents[1] / "example_config.json").read_text(encoding="utf-8"))
+        raw["players"][0]["desired_responsible"]["water_supply"] = "administration"
+        config = GameConfig.from_dict(raw)
+        self.assertEqual(config.players[0].desired_responsible["water_supply"], "administration")
+
+        state = merge_round(State(), parse_sets('SET components.water_supply.responsible = "administration"', "administration", config), config)
+        empty_state = State()
+        self.assertEqual(score_state(state, config, signed=True)["administration"], score_state(empty_state, config, signed=True)["administration"] + 10)
+
+        state_ind = merge_round(State(), parse_sets('SET components.water_supply.responsible = "industrial"', "industrial", config), config)
+        self.assertEqual(score_state(state_ind, config, signed=True)["industrial"], score_state(empty_state, config, signed=True)["industrial"] - 10)
 
     def test_yes_votes_do_not_lift_penalty_without_complete_contract(self):
         chat = ScriptedChat((["Без изменений", "NO_CHANGES"] * (len(CONFIG.players) * CONFIG.max_rounds)) + [
@@ -145,11 +164,11 @@ class CoreTests(unittest.TestCase):
         self.assertIn({"role": "user", "content": result["session"][2]["text"]}, first_player_messages)
         self.assertEqual(first_player_messages[-1], {"role": "user", "content": "Раунд 1. Слово предоставлено: Администрация."})
         self.assertEqual(sum(message["role"] == "system" for message in first_player_messages), 1)
-        self.assertIn({"role": "user", "content": first_player_messages[0]["content"]}, first_player_messages)
-        self.assertEqual(sum(message["content"].startswith("Личные ожидания для оценки:") for message in first_player_messages), 2)
-        self.assertEqual(sum(message["content"].startswith("Оценка каждого участника:") for message in first_player_messages), 2)
-        self.assertEqual(sum(message["content"].startswith("Слушания открыты.") for message in first_player_messages), 2)
-        self.assertEqual(sum(message["content"].startswith("Раунд 1 из") for message in first_player_messages), 2)
+        self.assertNotIn({"role": "user", "content": first_player_messages[0]["content"]}, first_player_messages)
+        self.assertEqual(sum(message["content"].startswith("Личные ожидания для оценки:") for message in first_player_messages), 1)
+        self.assertEqual(sum(message["content"].startswith("Оценка каждого участника:") for message in first_player_messages), 1)
+        self.assertEqual(sum(message["content"].startswith("Слушания открыты.") for message in first_player_messages), 1)
+        self.assertEqual(sum(message["content"].startswith("Раунд 1 из") for message in first_player_messages), 1)
         self.assertTrue(any(f"Раунд 1 из {CONFIG.max_rounds}" in message["content"] for message in first_player_messages))
         admin_expectations = next(message["content"] for message in first_player_messages if message["content"].startswith("Личные ожидания для оценки:"))
         self.assertIn("желаемый собственный взнос — 0%", admin_expectations)
@@ -490,6 +509,88 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertIn("запуск технически прерван", output.with_suffix(".md").read_text(encoding="utf-8"))
             self.assertIn("## Сообщения, переданные LLM", output.with_name("result_with_prompts.md").read_text(encoding="utf-8"))
+
+
+    def test_parameter_levers_parsing_validation_and_merge(self):
+        sets_text = (
+            'SET parameters.guilt = "shared"\n'
+            'SET parameters.plant_mode = "70%"\n'
+            'SET parameters.tariffs_freeze = true\n'
+            'SET parameters.timeline_months = 24'
+        )
+        actions = parse_sets(sets_text, "administration", CONFIG)
+        self.assertEqual(len(actions), 4)
+        self.assertEqual(actions[0].path, "parameters.guilt")
+        self.assertEqual(actions[0].value, "shared")
+        self.assertEqual(actions[1].value, "70%")
+        self.assertEqual(actions[2].value, True)
+        self.assertEqual(actions[3].value, 24)
+
+        # Invalid param or value raises GameError
+        with self.assertRaises(GameError):
+            parse_sets('SET parameters.unknown_lever = "val"', "administration", CONFIG)
+        with self.assertRaises(GameError):
+            parse_sets('SET parameters.plant_mode = "50%"', "administration", CONFIG)
+
+        # Merge round records parameters and detects conflict
+        state = merge_round(State(), actions, CONFIG)
+        self.assertEqual(state.value("parameters.guilt"), "shared")
+        self.assertEqual(state.value("parameters.plant_mode"), "70%")
+        self.assertFalse(state.conflict("parameters.plant_mode"))
+
+        # Conflicting proposal from industrial
+        conflict_actions = parse_sets('SET parameters.plant_mode = "100%"', "industrial", CONFIG)
+        state2 = merge_round(state, conflict_actions, CONFIG)
+        self.assertTrue(state2.conflict("parameters.plant_mode"))
+        self.assertIn("parameters.plant_mode", state2.conflicts())
+        self.assertIsNone(state2.value("parameters.plant_mode"))
+
+    def test_parameter_normalization_in_converter(self):
+        raw = (
+            'SET parameters.guilt = "паритет"\n'
+            'SET parameters.tariffs_freeze = "да"\n'
+            'SET parameters.tax_relief = "нет"\n'
+            'SET parameters.plant_mode = "70"\n'
+            'SET parameters.timeline_months = "24 месяца"'
+        )
+        normalized = _normalize_converter_sets(raw, CONFIG)
+        self.assertIn('SET parameters.guilt = "shared"', normalized)
+        self.assertIn('SET parameters.tariffs_freeze = true', normalized)
+        self.assertIn('SET parameters.tax_relief = false', normalized)
+        self.assertIn('SET parameters.plant_mode = "70%"', normalized)
+        self.assertIn('SET parameters.timeline_months = 24', normalized)
+
+    def test_multi_factor_scoring_with_levers_and_table_render(self):
+        # 5-player config demo
+        from tests.test_langflow_bridge import DEMO
+        config = GameConfig.from_dict(DEMO)
+        state = State()
+
+        # Without agreed parameters
+        scores_base = score_state(state, config, signed=True)
+
+        # Apply agreed parameters: shared guilt, tariffs freeze, open sensors, plant 70%
+        actions = parse_sets(
+            'SET parameters.guilt = "shared"\n'
+            'SET parameters.tariffs_freeze = true\n'
+            'SET parameters.open_sensors = true\n'
+            'SET parameters.plant_mode = "70%"',
+            "city_administration",
+            config,
+        )
+        state_agreed = merge_round(state, actions, config)
+        scores_agreed = score_state(state_agreed, config, signed=True)
+
+        # Residents score must increase with tariffs frozen and open sensors
+        self.assertGreater(scores_agreed["city_residents"], scores_base["city_residents"])
+        # NGO score must increase with open sensors and 70% plant mode
+        self.assertGreater(scores_agreed["environmental_ngo"], scores_base["environmental_ngo"])
+
+        # Table includes parameter rows
+        table = render_table(state_agreed, config, signed=True)
+        self.assertIn("Условие: Заморозка тарифов ЖКХ", table)
+        self.assertIn("Условие: Режим завода", table)
+        self.assertIn("Да (Администрация)", table)
 
 
 if __name__ == "__main__":
