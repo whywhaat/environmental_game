@@ -212,8 +212,8 @@ CORRECTIONS = {
         "Налоговые льготы холдингу: его кредит не опускает «Экономику» ниже «частично»",
         "наша формализация по учебнику, 3.1, табл. 5 («Экономика»: налоговые поступления)"),
     MORATORIUM: (
-        "Мораторий на протесты: «Политика» через год не ниже «частично»; через 10 лет без введённых очистных он не "
-        "помогает",
+        "Мораторий на протесты — мера на время работ: до ввода очистных «Политика» не ниже «частично»; через 10 лет "
+        "он не учитывается",
         "наша формализация по учебнику, 3.1, табл. 5 («Политика»: число публичных конфликтов)"),
 }
 
@@ -412,7 +412,8 @@ def corrections(facts: dict[str, Any], month: int, moment: str) -> list[tuple[st
         found.append((GUILT_CITY_CORRECTION, "politics", at_most_partly))
     if TAX_RELIEF in facts["acting"] and HOLDING in facts["credit"]:
         found.append((TAX_RELIEF, "economy", at_least_partly))
-    if MORATORIUM in facts["acting"] and moment == "year_1":
+    # Мораторий — мера на время работ: до ввода очистных, но не в горизонте прогноза.
+    if MORATORIUM in facts["acting"] and moment != "year_10" and not built_by(facts, month):
         found.append((MORATORIUM, "politics", at_least_partly))
     return found
 
@@ -446,7 +447,7 @@ def fates(facts: dict[str, Any], state: dict[str, Any]) -> dict[str, list[dict[s
     return {
         ADMIN: [check("Финансирование получено от области и холдинга",
                       shares[REGION] + shares[HOLDING] >= FUNDING_FROM_OTHERS_SHARE),
-                check("Массовых протестов нет", year_10["politics"] != FAILED or MORATORIUM in facts["acting"]),
+                check("Массовых протестов нет", year_10["politics"] != FAILED),
                 check("Вину за аварию не возложили на город", facts["guilt"] != GUILT_ON_CITY)],
         HOLDING: [check("Негатив к холдингу снижен до 60% за год", year_1["media"] == ACHIEVED),
                   check("Вложения не чрезмерные", shares[HOLDING] < HOLDING_PAID_ALL_SHARE and HOLDING not in credit)],

@@ -210,15 +210,15 @@ class ConditionTests(unittest.TestCase):
         self.assertIn("Налоговые льготы холдингу: его кредит не опускает «Экономику» ниже «частично».",
                       explained(result_data))
 
-    def test_protest_moratorium_holds_first_year_but_not_a_decade_without_plant(self):
+    def test_protest_moratorium_holds_only_while_works_go_on(self):
         result_data = game(FAIR_SPLIT, {**ALL_FOR, HOLDING: False}, {"protest_moratorium": True})
         result = forecast(result_data)
         self.assertIsNone(result["commissioning_month"])
         self.assertEqual(result["state"]["year_1"]["subsystems"]["politics"], "частично")
         self.assertEqual(result["state"]["year_10"]["subsystems"]["politics"], "не достигнуто")
-        self.assertTrue(result["fates"][ADMIN][1]["met"])  # массовых протестов нет: действует мораторий
-        self.assertIn("Мораторий на протесты: «Политика» через год не ниже «частично»; через 10 лет без введённых "
-                      "очистных он не помогает.", explained(result_data))
+        self.assertFalse(result["fates"][ADMIN][1]["met"])  # через 10 лет протесты мораторием не сдержать
+        self.assertIn("Мораторий на протесты — мера на время работ: до ввода очистных «Политика» не ниже "
+                      "«частично»; через 10 лет он не учитывается.", explained(result_data))
 
 
 class FateTests(unittest.TestCase):
