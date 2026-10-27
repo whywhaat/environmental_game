@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .catalog import (ACHIEVED, CONDITIONS, FAILED, GUILT, GUILT_LABELS, HOLDING, MOMENT_LABELS, PARTLY, PLANT_MODE,
-                      RECONSTRUCTION_LABEL, ROLE_LABELS, SUBSYSTEM_LABELS, TARIFFS, TIMELINE, VOTE_LABELS, WATER,
-                      WATER_MAX_MONTHS)
+from .catalog import (ACHIEVED, CONDITIONS, FAILED, GUILT, GUILT_LABELS, MOMENT_LABELS, PARTLY, PLANT_MODE,
+                      RECONSTRUCTION_LABEL, RECONSTRUCTION_OWNER, ROLE_LABELS, SUBSYSTEM_LABELS, TARIFFS, TIMELINE,
+                      VOTE_LABELS, WATER, WATER_MAX_MONTHS)
 
 MLN = 1_000_000
 
@@ -51,8 +51,6 @@ def events(result: dict[str, Any]) -> str:
 
 
 def condition_value(condition: str, value: Any) -> str:
-    if condition == TIMELINE:
-        return f"{value} мес."
     if condition == GUILT:
         return GUILT_LABELS[value]
     if isinstance(value, bool):
@@ -63,8 +61,6 @@ def condition_value(condition: str, value: Any) -> str:
 def condition_execution(result: dict[str, Any], condition: str) -> str:
     if condition == GUILT:
         return "решение: действует, если протокол принят"
-    if condition == TIMELINE:
-        return "срок реконструкции"
     return result["execution"]["conditions"].get(condition, "—")
 
 
@@ -77,6 +73,8 @@ def temporary_measures(result: dict[str, Any]) -> str:
 
 
 def protocol_conditions(result: dict[str, Any]) -> str:
+    if not result["protocol"]["accepted"]:
+        return "протокол не принят, его условия не вступили в силу"
     conditions = result["protocol"]["conditions"]
     included = [f"{CONDITIONS[condition]['label'][0].lower()}{CONDITIONS[condition]['label'][1:]} — {level}"
                 for condition, level in result["execution"]["conditions"].items()]
@@ -109,8 +107,8 @@ def render_report(result: dict[str, Any]) -> str:
         lines.append(f"| {label} | {VOTE_LABELS[protocol['votes'][role]]} | "
                      f"{mln(amount) if amount else '—'} | {execution['contributions'].get(role, '—')} |")
     lines += ["", "| Условие протокола | Значение | Владелец | Исполнение |", "| --- | --- | --- | --- |",
-              f"| {RECONSTRUCTION_LABEL} | срок {protocol['conditions'][TIMELINE]} мес. | {ROLE_LABELS[HOLDING]} | "
-              f"{execution['reconstruction']} |"]
+              f"| {RECONSTRUCTION_LABEL} | срок {protocol['conditions'][TIMELINE]} мес. | "
+              f"{ROLE_LABELS[RECONSTRUCTION_OWNER]} | {execution['reconstruction']} |"]
     for condition, info in CONDITIONS.items():
         if condition == TIMELINE:
             continue

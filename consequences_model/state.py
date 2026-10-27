@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .catalog import (ACHIEVED, ADMIN, CITY_PAID_ALL_SHARE, FAILED, FULL, FUNDING_FROM_OTHERS_SHARE, HOLDING,
+from .catalog import (ACHIEVED, ADMIN, CITY_PAID_ALL_SHARE, FAILED, FULL, FUNDING_FROM_OTHERS_SHARE,
+                      GUILT_CITY_CORRECTION, GUILT_HOLDING_CORRECTION, GUILT_ON_CITY, GUILT_ON_HOLDING, HOLDING,
                       HOLDING_PAID_ALL_SHARE, HORIZON_MONTHS, LATE_WITHOUT_WATER_MONTHS, MEDIA_HOLDING_MIN_SHARE,
                       MORATORIUM, NGO, NONE, PARTLY, PLANT_MODE, REGION, REGION_LOW_COST_SHARE, RESIDENTS, SENSORS,
                       TARIFFS, TAX_RELIEF, WATER, WATER_MAX_MONTHS, YEAR_1_MONTH)
@@ -44,7 +45,7 @@ def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, st
         "economy": level(HOLDING in credit,
                          shares[HOLDING] < HOLDING_PAID_ALL_SHARE and shares[ADMIN] < CITY_PAID_ALL_SHARE
                          and not credit),
-        # Табл. 5: выявленные и устранённые нарушения, договоры с публичными KPI.
+        # Табл. 5: выявленные и устранённые нарушения, «договоры с публичными KPI».
         "law": level(facts["conditions"].get(SENSORS, NONE) == NONE,
                      facts["monitoring_ok"] and all(value == FULL for value in facts["conditions"].values())),
         # Табл. 5; методичка: доверие к власти, протесты.
@@ -53,44 +54,44 @@ def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, st
     }
 
 
-def not_below(current: str, floor: str) -> str:
-    return current if RANK[current] >= RANK[floor] else floor
+def at_least_partly(level: str) -> str:
+    return level if RANK[level] >= RANK[PARTLY] else PARTLY
 
 
-def not_above(current: str, cap: str) -> str:
-    return current if RANK[current] <= RANK[cap] else cap
+def at_most_partly(level: str) -> str:
+    return level if RANK[level] <= RANK[PARTLY] else PARTLY
 
 
-def corrections(facts: dict[str, Any], month: int, moment: str) -> list[tuple[str, str, Callable[[str, str], str]]]:
+def corrections(facts: dict[str, Any], month: int, moment: str) -> list[tuple[str, str, Callable[[str], str]]]:
     """Поправки от условий протокола в момент прогноза: (поправка, подсистема, ограничение до «частично»)."""
-    found: list[tuple[str, str, Callable[[str, str], str]]] = []
+    found: list[tuple[str, str, Callable[[str], str]]] = []
     if PLANT_MODE in facts["acting"] and not built_by(facts, month):
-        found += [("plant_mode", "ecology", not_below), ("plant_mode", "economy", not_above)]
-    if facts["guilt"] == "holding" and moment == "year_1":
-        found.append(("guilt_holding", "media", not_above))
-    if facts["guilt"] == "city":
-        found.append(("guilt_city", "politics", not_above))
+        found += [(PLANT_MODE, "ecology", at_least_partly), (PLANT_MODE, "economy", at_most_partly)]
+    if facts["guilt"] == GUILT_ON_HOLDING and moment == "year_1":
+        found.append((GUILT_HOLDING_CORRECTION, "media", at_most_partly))
+    if facts["guilt"] == GUILT_ON_CITY:
+        found.append((GUILT_CITY_CORRECTION, "politics", at_most_partly))
     if TAX_RELIEF in facts["acting"] and HOLDING in facts["credit"]:
-        found.append(("tax_relief", "economy", not_below))
+        found.append((TAX_RELIEF, "economy", at_least_partly))
     if MORATORIUM in facts["acting"] and moment == "year_1":
-        found.append(("protest_moratorium", "politics", not_below))
+        found.append((MORATORIUM, "politics", at_least_partly))
     return found
 
 
 def moment_state(facts: dict[str, Any], month: int, moment: str) -> dict[str, Any]:
+    """Уровни подсистем в момент прогноза и какие из них задала поправка условия: {подсистема: поправка}."""
     levels = subsystems(facts, month, moment == "year_10")
-    fired = []
+    corrected = {}
     for correction, subsystem, clamp in corrections(facts, month, moment):
-        corrected = clamp(levels[subsystem], PARTLY)
-        if corrected != levels[subsystem]:
-            levels[subsystem] = corrected
-            fired.append(correction)
-    return {"month": month, "subsystems": levels, "corrections": list(dict.fromkeys(fired))}
+        if clamp(levels[subsystem]) != levels[subsystem]:
+            levels[subsystem] = clamp(levels[subsystem])
+            corrected[subsystem] = correction
+    return {"month": month, "subsystems": levels, "corrected": corrected}
 
 
 def city_state(facts: dict[str, Any]) -> dict[str, Any]:
     moments = {"year_1": YEAR_1_MONTH, "commissioning": facts["month"], "year_10": HORIZON_MONTHS}
-    return {moment: {"month": None, "subsystems": None, "corrections": []} if month is None
+    return {moment: {"month": None, "subsystems": None, "corrected": {}} if month is None
             else moment_state(facts, month, moment)
             for moment, month in moments.items()}
 
@@ -107,7 +108,7 @@ def fates(facts: dict[str, Any], state: dict[str, Any]) -> dict[str, list[dict[s
         ADMIN: [check("Финансирование получено от области и холдинга",
                       shares[REGION] + shares[HOLDING] >= FUNDING_FROM_OTHERS_SHARE),
                 check("Массовых протестов нет", year_10["politics"] != FAILED or MORATORIUM in facts["acting"]),
-                check("Вину за аварию не возложили на город", facts["guilt"] != "city")],
+                check("Вину за аварию не возложили на город", facts["guilt"] != GUILT_ON_CITY)],
         HOLDING: [check("Негатив к холдингу снижен до 60% за год", year_1["media"] == ACHIEVED),
                   check("Вложения не чрезмерные", shares[HOLDING] < HOLDING_PAID_ALL_SHARE and HOLDING not in credit)],
         REGION: [check("Затраты области низкие: малая доля и без налоговых льгот холдингу",

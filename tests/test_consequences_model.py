@@ -30,29 +30,32 @@ NAMES = {ADMIN: "Администрация", HOLDING: "Промкомплекс
 BUDGETS = {ADMIN: 30 * MLN, HOLDING: 180 * MLN, REGION: 90 * MLN, RESIDENTS: 0, NGO: 0}  # демо-flow игры
 DEFAULT_CONDITIONS = {"guilt": "shared", "plant_mode": "100%", "timeline": 36, "tariffs_freeze": False,
                       "tax_relief": False, "open_sensors": False, "protest_moratorium": False, "water_supply": False}
+
+
 VOTE_WORDS = {True: "ЗА", False: "ПРОТИВ", None: "ВОЗДЕРЖАЛСЯ"}
 WATER_COST = 20 * MLN
+MAX_DEFICIT = 100_000  # игра принимает протокол при дефиците не больше 100 тыс. ₽
 
 
 def game(contributions, votes, conditions=None, accepted=None, total_cost=270 * MLN):
     """Итог игры в формате оркестратора Влада: Data.data."""
-    levers = {**DEFAULT_CONDITIONS, **(conditions or {})}
+    game_conditions = {**DEFAULT_CONDITIONS, **(conditions or {})}
     votes = {role: votes.get(role, False) for role in ROLES}
     total_money = float(sum(contributions.values()))
     deficit = max(0.0, total_cost - total_money)
     if accepted is None:
-        accepted = sum(vote is True for vote in votes.values()) >= 3 and deficit <= 100_000
+        accepted = sum(vote is True for vote in votes.values()) >= 3 and deficit <= MAX_DEFICIT
+    water_cost = float(WATER_COST) if game_conditions["water_supply"] else 0.0
     state_players = {NAMES[role]: {"contribution": float(contributions[role]) if role in contributions else None,
                                    "share": round(contributions[role] / total_cost * 100, 2) if role in contributions
                                    else None,
-                                   "spent_on_levers": float(WATER_COST) if role == ADMIN and levers["water_supply"]
-                                   else 0.0}
+                                   "spent_on_levers": water_cost if role == ADMIN else 0.0}
                      for role in ROLES}
     return {
         "report": "", "files": {}, "history": [], "rag_retrievals": [],
         "players": [{"id": role, "name": NAMES[role], "budget": BUDGETS[role], "prompt": "Стратегия"}
                     for role in ROLES],
-        "state": {"total_cost": float(total_cost), "players": state_players, "levers": levers},
+        "state": {"total_cost": float(total_cost), "players": state_players, "levers": game_conditions},
         "voting_summary": {"records": [{"player": NAMES[role], "vote": VOTE_WORDS[votes[role]], "comment": ""}
                                        for role in ROLES]},
         "consensus_reached": accepted,
@@ -65,6 +68,19 @@ def game(contributions, votes, conditions=None, accepted=None, total_cost=270 * 
 FAIR_SPLIT = {ADMIN: 10 * MLN, HOLDING: 170 * MLN, REGION: 90 * MLN}
 REFERENCE = {"open_sensors": True, "water_supply": True, "tariffs_freeze": True}
 ALL_FOR = {role: True for role in ROLES}
+NO_SENSORS = {"water_supply": True, "tariffs_freeze": True}
+EVERY_OUTCOME = {
+    "Открытая река": game(FAIR_SPLIT, ALL_FOR, REFERENCE),
+    "Застой": game(FAIR_SPLIT, {}, REFERENCE),
+    "Каждый сам за себя": game(FAIR_SPLIT, {ADMIN: True, HOLDING: True}, REFERENCE),
+    "Недострой": game(FAIR_SPLIT, {**ALL_FOR, HOLDING: False}, NO_SENSORS),
+    "Решили без жителей": game(FAIR_SPLIT, {**ALL_FOR, RESIDENTS: False, NGO: False}, REFERENCE),
+    "Долгострой": game({ADMIN: 30 * MLN, HOLDING: 100 * MLN, REGION: 140 * MLN}, {**ALL_FOR, HOLDING: False}),
+    "Холдинг заплатил за всех": game({ADMIN: 10 * MLN, HOLDING: 200 * MLN, REGION: 60 * MLN}, ALL_FOR, REFERENCE),
+    "Город заплатил за всех": game({ADMIN: 140 * MLN, HOLDING: 80 * MLN, REGION: 50 * MLN}, ALL_FOR, REFERENCE),
+    "Чистая вода, закрытые данные": game(FAIR_SPLIT, ALL_FOR, NO_SENSORS),
+    "Компромисс": game(FAIR_SPLIT, {**ALL_FOR, RESIDENTS: False}, REFERENCE),
+}
 
 
 class OutcomeTests(unittest.TestCase):
@@ -125,21 +141,6 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(forecast(game(split, ALL_FOR, {"open_sensors": True}))["protocol"]["credit"], [])
 
 
-NO_SENSORS = {"water_supply": True, "tariffs_freeze": True}
-EVERY_OUTCOME = {
-    "Открытая река": game(FAIR_SPLIT, ALL_FOR, REFERENCE),
-    "Застой": game(FAIR_SPLIT, {}, REFERENCE),
-    "Каждый сам за себя": game(FAIR_SPLIT, {ADMIN: True, HOLDING: True}, REFERENCE),
-    "Недострой": game(FAIR_SPLIT, {**ALL_FOR, HOLDING: False}, NO_SENSORS),
-    "Решили без жителей": game(FAIR_SPLIT, {**ALL_FOR, RESIDENTS: False, NGO: False}, REFERENCE),
-    "Долгострой": game({ADMIN: 30 * MLN, HOLDING: 100 * MLN, REGION: 140 * MLN}, {**ALL_FOR, HOLDING: False}),
-    "Холдинг заплатил за всех": game({ADMIN: 10 * MLN, HOLDING: 200 * MLN, REGION: 60 * MLN}, ALL_FOR, REFERENCE),
-    "Город заплатил за всех": game({ADMIN: 140 * MLN, HOLDING: 80 * MLN, REGION: 50 * MLN}, ALL_FOR, REFERENCE),
-    "Чистая вода, закрытые данные": game(FAIR_SPLIT, ALL_FOR, NO_SENSORS),
-    "Компромисс": game(FAIR_SPLIT, {**ALL_FOR, RESIDENTS: False}, REFERENCE),
-}
-
-
 class CityStateTests(unittest.TestCase):
     def test_reference_protocol_reaches_every_subsystem_goal_by_year_ten(self):
         state = forecast(EVERY_OUTCOME["Открытая река"])["state"]
@@ -180,7 +181,6 @@ class ConditionTests(unittest.TestCase):
         self.assertIn("Режим комбината 70% до ввода очистных: «Экология и наука» не ниже «частично» — сбросов "
                       "меньше; «Экономика» не выше «частично» — падают занятость и выручка.", explained(result_data))
 
-
     def test_guilt_on_holding_keeps_negative_above_target_after_first_year(self):
         result_data = game(FAIR_SPLIT, ALL_FOR, {**REFERENCE, "guilt": "holding"})
         result = forecast(result_data)
@@ -219,6 +219,7 @@ class ConditionTests(unittest.TestCase):
         self.assertTrue(result["fates"][ADMIN][1]["met"])  # массовых протестов нет: действует мораторий
         self.assertIn("Мораторий на протесты: «Политика» через год не ниже «частично»; через 10 лет без введённых "
                       "очистных он не помогает.", explained(result_data))
+
 
 class FateTests(unittest.TestCase):
     def test_reference_protocol_fates_follow_role_goals(self):
@@ -278,6 +279,11 @@ class ReportTests(unittest.TestCase):
                       "обоюдная; включены: заморозка тарифов ЖКХ — полностью, открытые эко-датчики 24/7 — "
                       "полностью, гарантия питьевой воды — полностью.", prompt)
 
+    def test_herald_prompt_does_not_present_conditions_of_rejected_protocol_as_acting(self):
+        prompt = forecast(game(FAIR_SPLIT, {}, {**REFERENCE, "guilt": "city"}))["herald_prompt"]
+        self.assertIn("- Условия протокола: протокол не принят, его условия не вступили в силу.", prompt)
+        self.assertNotIn("вина за аварию", prompt)
+
     def test_herald_prompt_carries_outcome_and_forbids_inventing_facts(self):
         prompt = forecast(EVERY_OUTCOME["Открытая река"])["herald_prompt"]
         self.assertIn("«Вестник города N, 2036»", prompt)
@@ -303,6 +309,14 @@ class GameResultTests(unittest.TestCase):
         result_data["voting_summary"]["records"] = [record for record in result_data["voting_summary"]["records"]
                                                     if record["player"] != NAMES[NGO]]
         self.assertIsNone(forecast(result_data)["protocol"]["votes"][NGO])
+
+    def test_unknown_vote_is_reported_and_counts_as_abstention(self):
+        result_data = game(FAIR_SPLIT, ALL_FOR, REFERENCE)
+        result_data["voting_summary"]["records"][0]["vote"] = "НЕ ЗНАЮ"
+        result = forecast(result_data)
+        self.assertIsNone(result["protocol"]["votes"][ADMIN])
+        self.assertEqual(result["warnings"], ["Неизвестный голос «НЕ ЗНАЮ» у игрока «Администрация»: считается "
+                                              "«воздержался»."])
 
     def test_contributions_and_votes_are_matched_to_roles_by_player_name(self):
         result_data = game(FAIR_SPLIT, ALL_FOR, REFERENCE)
@@ -370,6 +384,14 @@ class ExplanationTests(unittest.TestCase):
         texts = explained(game(FAIR_SPLIT, {**ALL_FOR, ADMIN: False}, NO_SENSORS))
         self.assertIn("Условие «Гарантия питьевой воды» выполнено частично → на город не влияет.", texts)
         self.assertNotIn("Условие «Заморозка тарифов ЖКХ» выполнено полностью → на город не влияет.", texts)
+
+    def test_level_set_by_condition_is_explained_by_the_condition(self):
+        rules = forecast(game(FAIR_SPLIT, ALL_FOR, {**REFERENCE, "guilt": "city"}))["explanation"]["rules"]
+        self.assertIn({"step": "Состояние города",
+                       "source": "наша формализация по учебнику, 3.1, табл. 5 («Политика»: индекс доверия к местной "
+                                 "власти)",
+                       "text": "Политика через 10 лет — частично: уровень задан условием протокола, см. поправку "
+                               "ниже."}, rules)
 
     def test_vote_rule_reads_naturally_for_rejected_protocol(self):
         texts = explained(EVERY_OUTCOME["Каждый сам за себя"])

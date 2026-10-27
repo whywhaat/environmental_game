@@ -51,16 +51,19 @@ CONDITIONS = {
     MORATORIUM: {"label": "Мораторий на протесты и иски", "owner": RESIDENTS},
     WATER: {"label": "Гарантия питьевой воды", "owner": ADMIN},
 }
-# Значения по умолчанию — как в игре: они стоят в проекте соглашения, пока владелец их не поменял.
+# Значения по умолчанию — как в игре: они стоят в проекте протокола, пока владелец их не поменял.
 CONDITION_DEFAULTS = {TIMELINE: 36, PLANT_MODE: "100%", GUILT: "shared", TARIFFS: False, TAX_RELIEF: False,
                       SENSORS: False, MORATORIUM: False, WATER: False}
 TIMELINE_MONTHS = (24, 48)
 PLANT_MODES = ("100%", "70%")
 PLANT_REDUCED = "70%"
-GUILT_LABELS = {"shared": "обоюдная", "holding": "на холдинге", "city": "на городе"}
+GUILT_ON_HOLDING = "holding"
+GUILT_ON_CITY = "city"
+GUILT_LABELS = {"shared": "обоюдная", GUILT_ON_HOLDING: "на холдинге", GUILT_ON_CITY: "на городе"}
 # Включённые «да/нет»-условия — обязательства владельца; режим комбината — только при 70%.
-SWITCHES = (WATER, TARIFFS, TAX_RELIEF, SENSORS, MORATORIUM)
+YES_NO_CONDITIONS = (WATER, TARIFFS, TAX_RELIEF, SENSORS, MORATORIUM)
 RECONSTRUCTION_LABEL = "Реконструкция очистных"
+RECONSTRUCTION_OWNER = HOLDING  # владелец срока реконструкции
 
 # Голос по протоколу: None — воздержался (или не голосовал).
 VOTE_LABELS = {True: "за", False: "против", None: "воздержался"}
@@ -122,7 +125,7 @@ OUTCOMES = {
                 "открытые датчики работают, жители и НКО голосовали за",
         "description": "Очистные введены в срок из протокола, а открытые эко-датчики НКО показывают всем "
                        "состояние реки. Затраты разделены, жители и экологи участвовали в "
-                       "решении, негатив к холдингу снижается, протестов нет. Это решение близко к эталонному "
+                       "решении, негатив к холдингу снижается. Это решение близко к эталонному "
                        "(учебник, табл. 7).",
     },
     "closed_data": {
@@ -184,7 +187,6 @@ SOURCE_FORMALIZATION = "наша формализация"
 SOURCE_TABLE_4 = "Учебник, 3.1, табл. 4"
 SOURCE_TABLE_5_LAW = "Учебник, 3.1, табл. 5 («Право»)"
 SOURCE_TABLE_5_ECONOMY = "Учебник, 3.1, табл. 5 («Экономика»)"
-SOURCE_METODICHKA = "Методичка"
 SOURCE_OUTCOMES = "каталог исходов (наша формализация)"
 
 SOURCE_TABLES_4_5 = "Учебник, 3.1, табл. 4, 5"
@@ -192,21 +194,27 @@ SOURCE_TABLES_5_7 = "Учебник, 3.1, табл. 5, 7"
 SOURCE_TABLE_5_POLITICS = "Учебник, 3.1, табл. 5 («Политика»); методичка"
 
 # Поправки от условий протокола к уровням подсистем: текст для объяснения и опора.
+GUILT_HOLDING_CORRECTION = "guilt_holding"
+GUILT_CITY_CORRECTION = "guilt_city"
 CORRECTIONS = {
-    "plant_mode": ("Режим комбината 70% до ввода очистных: «Экология и наука» не ниже «частично» — сбросов меньше; "
-                   "«Экономика» не выше «частично» — падают занятость и выручка",
-                   "наша формализация по учебнику, 3.1, табл. 5 («Экономика»: уровень занятости)"),
-    "guilt_holding": ("Вина за аварию признана за холдингом: «Массмедиа» через год не выше «частично» — негатив "
-                      "к холдингу не упадёт до 60%, если вина официально на нём",
-                      "наша формализация по учебнику, 3.1, табл. 5 («Массмедиа»: негативный имидж компании)"),
-    "guilt_city": ("Вина за аварию признана за городом: «Политика» не выше «частично» — подорвано доверие к "
-                   "местной власти",
-                   "наша формализация по учебнику, 3.1, табл. 5 («Политика»: индекс доверия к местной власти)"),
-    "tax_relief": ("Налоговые льготы холдингу: его кредит не опускает «Экономику» ниже «частично»",
-                   "наша формализация по учебнику, 3.1, табл. 5 («Экономика»: налоговые поступления)"),
-    "protest_moratorium": ("Мораторий на протесты: «Политика» через год не ниже «частично»; через 10 лет без "
-                           "введённых очистных он не помогает",
-                           "наша формализация по учебнику, 3.1, табл. 5 («Политика»: число публичных конфликтов)"),
+    PLANT_MODE: (
+        "Режим комбината 70% до ввода очистных: «Экология и наука» не ниже «частично» — сбросов меньше; "
+        "«Экономика» не выше «частично» — падают занятость и выручка",
+        "наша формализация по учебнику, 3.1, табл. 5 («Экономика»: уровень занятости)"),
+    GUILT_HOLDING_CORRECTION: (
+        "Вина за аварию признана за холдингом: «Массмедиа» через год не выше «частично» — негатив к холдингу не "
+        "упадёт до 60%, если вина официально на нём",
+        "наша формализация по учебнику, 3.1, табл. 5 («Массмедиа»: негативный имидж компании)"),
+    GUILT_CITY_CORRECTION: (
+        "Вина за аварию признана за городом: «Политика» не выше «частично» — подорвано доверие к местной власти",
+        "наша формализация по учебнику, 3.1, табл. 5 («Политика»: индекс доверия к местной власти)"),
+    TAX_RELIEF: (
+        "Налоговые льготы холдингу: его кредит не опускает «Экономику» ниже «частично»",
+        "наша формализация по учебнику, 3.1, табл. 5 («Экономика»: налоговые поступления)"),
+    MORATORIUM: (
+        "Мораторий на протесты: «Политика» через год не ниже «частично»; через 10 лет без введённых очистных он не "
+        "помогает",
+        "наша формализация по учебнику, 3.1, табл. 5 («Политика»: число публичных конфликтов)"),
 }
 
 # Почему подсистема получила уровень: критерий словами и опора.
@@ -244,7 +252,7 @@ class Protocol:
     votes: dict[str, bool | None]
     accepted: bool
     budgets: dict[str, float] = field(default_factory=dict)
-    spent: dict[str, float] = field(default_factory=dict)
+    spent_on_conditions: dict[str, float] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default=())
 
     def supports(self, role: str) -> bool:
@@ -255,18 +263,21 @@ class Protocol:
     def included(self) -> list[str]:
         """Условия, которые стали обязательствами владельцев: включённые «да/нет» и режим комбината 70%."""
         return [condition for condition in CONDITIONS
-                if (condition in SWITCHES and self.conditions[condition] is True)
+                if (condition in YES_NO_CONDITIONS and self.conditions[condition] is True)
                 or (condition == PLANT_MODE and self.conditions[condition] == PLANT_REDUCED)]
 
     @property
     def promised_months(self) -> int:
         return int(self.conditions[TIMELINE])
 
+    def overspend(self, role: str) -> float:
+        """Насколько взнос роли вместе с расходами на условия больше её бюджета."""
+        return self.contributions.get(role, 0) + self.spent_on_conditions.get(role, 0) - self.budgets[role]
+
     @property
     def credit(self) -> list[str]:
         """Роли, чей взнос вместе с расходами на условия больше бюджета: превышение покрыто кредитом."""
-        return [role for role in ROLE_LABELS if role in self.budgets
-                and self.contributions.get(role, 0) + self.spent.get(role, 0) > self.budgets[role]]
+        return [role for role in ROLE_LABELS if role in self.budgets and self.overspend(role) > 0]
 
 
 def valid(condition: str, value: Any) -> bool:
@@ -300,24 +311,24 @@ def read_protocol(game_result: dict[str, Any]) -> Protocol:
         return roles.get(name)
 
     state = game_result["state"]
-    contributions, spent = {}, {}
+    contributions, spent_on_conditions = {}, {}
     for name, record in (state.get("players") or {}).items():
         role = role_of(name)
         if role and record.get("contribution"):
             contributions[role] = record["contribution"]
         if role and record.get("spent_on_levers"):
-            spent[role] = record["spent_on_levers"]
+            spent_on_conditions[role] = record["spent_on_levers"]
 
-    levers = state.get("levers") or {}
+    game_conditions = state.get("levers") or {}
     conditions = {}
     for condition, default in CONDITION_DEFAULTS.items():
-        value = levers.get(condition, default)
+        value = game_conditions.get(condition, default)
         if not valid(condition, value):
             warnings.append(f"Недопустимое значение {value!r} условия «{CONDITIONS[condition]['label']}»: "
                             "взято значение по умолчанию.")
             value = default
         conditions[condition] = value
-    for condition in levers:
+    for condition in game_conditions:
         if condition not in CONDITIONS:
             warnings.append(f"Неизвестное условие {condition}: в прогнозе не учитывается.")
 
@@ -325,11 +336,14 @@ def read_protocol(game_result: dict[str, Any]) -> Protocol:
     votes: dict[str, bool | None] = {role: None for role in ROLE_LABELS}
     for record in (game_result.get("voting_summary") or {}).get("records") or []:
         role = role_of(record.get("player"))
+        if role and record.get("vote") not in GAME_VOTES:
+            warnings.append(f"Неизвестный голос «{record.get('vote')}» у игрока «{record.get('player')}»: считается "
+                            "«воздержался».")
         if role:
             votes[role] = GAME_VOTES.get(record.get("vote"))
 
     return Protocol(game_result["total_cost"], contributions, conditions, votes,
-                    bool(game_result.get("consensus_reached")), budgets, spent,
+                    bool(game_result.get("consensus_reached")), budgets, spent_on_conditions,
                     tuple(dict.fromkeys(warnings)))
 
 
@@ -370,7 +384,7 @@ def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, st
         "economy": level(HOLDING in credit,
                          shares[HOLDING] < HOLDING_PAID_ALL_SHARE and shares[ADMIN] < CITY_PAID_ALL_SHARE
                          and not credit),
-        # Табл. 5: выявленные и устранённые нарушения, договоры с публичными KPI.
+        # Табл. 5: выявленные и устранённые нарушения, «договоры с публичными KPI».
         "law": level(facts["conditions"].get(SENSORS, NONE) == NONE,
                      facts["monitoring_ok"] and all(value == FULL for value in facts["conditions"].values())),
         # Табл. 5; методичка: доверие к власти, протесты.
@@ -379,44 +393,44 @@ def subsystems(facts: dict[str, Any], month: int, horizon: bool) -> dict[str, st
     }
 
 
-def not_below(current: str, floor: str) -> str:
-    return current if RANK[current] >= RANK[floor] else floor
+def at_least_partly(level: str) -> str:
+    return level if RANK[level] >= RANK[PARTLY] else PARTLY
 
 
-def not_above(current: str, cap: str) -> str:
-    return current if RANK[current] <= RANK[cap] else cap
+def at_most_partly(level: str) -> str:
+    return level if RANK[level] <= RANK[PARTLY] else PARTLY
 
 
-def corrections(facts: dict[str, Any], month: int, moment: str) -> list[tuple[str, str, Callable[[str, str], str]]]:
+def corrections(facts: dict[str, Any], month: int, moment: str) -> list[tuple[str, str, Callable[[str], str]]]:
     """Поправки от условий протокола в момент прогноза: (поправка, подсистема, ограничение до «частично»)."""
-    found: list[tuple[str, str, Callable[[str, str], str]]] = []
+    found: list[tuple[str, str, Callable[[str], str]]] = []
     if PLANT_MODE in facts["acting"] and not built_by(facts, month):
-        found += [("plant_mode", "ecology", not_below), ("plant_mode", "economy", not_above)]
-    if facts["guilt"] == "holding" and moment == "year_1":
-        found.append(("guilt_holding", "media", not_above))
-    if facts["guilt"] == "city":
-        found.append(("guilt_city", "politics", not_above))
+        found += [(PLANT_MODE, "ecology", at_least_partly), (PLANT_MODE, "economy", at_most_partly)]
+    if facts["guilt"] == GUILT_ON_HOLDING and moment == "year_1":
+        found.append((GUILT_HOLDING_CORRECTION, "media", at_most_partly))
+    if facts["guilt"] == GUILT_ON_CITY:
+        found.append((GUILT_CITY_CORRECTION, "politics", at_most_partly))
     if TAX_RELIEF in facts["acting"] and HOLDING in facts["credit"]:
-        found.append(("tax_relief", "economy", not_below))
+        found.append((TAX_RELIEF, "economy", at_least_partly))
     if MORATORIUM in facts["acting"] and moment == "year_1":
-        found.append(("protest_moratorium", "politics", not_below))
+        found.append((MORATORIUM, "politics", at_least_partly))
     return found
 
 
 def moment_state(facts: dict[str, Any], month: int, moment: str) -> dict[str, Any]:
+    """Уровни подсистем в момент прогноза и какие из них задала поправка условия: {подсистема: поправка}."""
     levels = subsystems(facts, month, moment == "year_10")
-    fired = []
+    corrected = {}
     for correction, subsystem, clamp in corrections(facts, month, moment):
-        corrected = clamp(levels[subsystem], PARTLY)
-        if corrected != levels[subsystem]:
-            levels[subsystem] = corrected
-            fired.append(correction)
-    return {"month": month, "subsystems": levels, "corrections": list(dict.fromkeys(fired))}
+        if clamp(levels[subsystem]) != levels[subsystem]:
+            levels[subsystem] = clamp(levels[subsystem])
+            corrected[subsystem] = correction
+    return {"month": month, "subsystems": levels, "corrected": corrected}
 
 
 def city_state(facts: dict[str, Any]) -> dict[str, Any]:
     moments = {"year_1": YEAR_1_MONTH, "commissioning": facts["month"], "year_10": HORIZON_MONTHS}
-    return {moment: {"month": None, "subsystems": None, "corrections": []} if month is None
+    return {moment: {"month": None, "subsystems": None, "corrected": {}} if month is None
             else moment_state(facts, month, moment)
             for moment, month in moments.items()}
 
@@ -433,7 +447,7 @@ def fates(facts: dict[str, Any], state: dict[str, Any]) -> dict[str, list[dict[s
         ADMIN: [check("Финансирование получено от области и холдинга",
                       shares[REGION] + shares[HOLDING] >= FUNDING_FROM_OTHERS_SHARE),
                 check("Массовых протестов нет", year_10["politics"] != FAILED or MORATORIUM in facts["acting"]),
-                check("Вину за аварию не возложили на город", facts["guilt"] != "city")],
+                check("Вину за аварию не возложили на город", facts["guilt"] != GUILT_ON_CITY)],
         HOLDING: [check("Негатив к холдингу снижен до 60% за год", year_1["media"] == ACHIEVED),
                   check("Вложения не чрезмерные", shares[HOLDING] < HOLDING_PAID_ALL_SHARE and HOLDING not in credit)],
         REGION: [check("Затраты области низкие: малая доля и без налоговых льгот холдингу",
@@ -492,8 +506,6 @@ def events(result: dict[str, Any]) -> str:
 
 
 def condition_value(condition: str, value: Any) -> str:
-    if condition == TIMELINE:
-        return f"{value} мес."
     if condition == GUILT:
         return GUILT_LABELS[value]
     if isinstance(value, bool):
@@ -504,8 +516,6 @@ def condition_value(condition: str, value: Any) -> str:
 def condition_execution(result: dict[str, Any], condition: str) -> str:
     if condition == GUILT:
         return "решение: действует, если протокол принят"
-    if condition == TIMELINE:
-        return "срок реконструкции"
     return result["execution"]["conditions"].get(condition, "—")
 
 
@@ -518,6 +528,8 @@ def temporary_measures(result: dict[str, Any]) -> str:
 
 
 def protocol_conditions(result: dict[str, Any]) -> str:
+    if not result["protocol"]["accepted"]:
+        return "протокол не принят, его условия не вступили в силу"
     conditions = result["protocol"]["conditions"]
     included = [f"{CONDITIONS[condition]['label'][0].lower()}{CONDITIONS[condition]['label'][1:]} — {level}"
                 for condition, level in result["execution"]["conditions"].items()]
@@ -550,8 +562,8 @@ def render_report(result: dict[str, Any]) -> str:
         lines.append(f"| {label} | {VOTE_LABELS[protocol['votes'][role]]} | "
                      f"{mln(amount) if amount else '—'} | {execution['contributions'].get(role, '—')} |")
     lines += ["", "| Условие протокола | Значение | Владелец | Исполнение |", "| --- | --- | --- | --- |",
-              f"| {RECONSTRUCTION_LABEL} | срок {protocol['conditions'][TIMELINE]} мес. | {ROLE_LABELS[HOLDING]} | "
-              f"{execution['reconstruction']} |"]
+              f"| {RECONSTRUCTION_LABEL} | срок {protocol['conditions'][TIMELINE]} мес. | "
+              f"{ROLE_LABELS[RECONSTRUCTION_OWNER]} | {execution['reconstruction']} |"]
     for condition, info in CONDITIONS.items():
         if condition == TIMELINE:
             continue
@@ -637,8 +649,8 @@ def rule(step: str, text: str, source: str) -> dict[str, str]:
 
 def execution_rules(protocol: Protocol, facts: dict[str, Any]) -> list[dict[str, str]]:
     rules = []
-    # Реконструкция — всегда обязательство холдинга.
-    owners = {HOLDING, *protocol.contributions, *(CONDITIONS[condition]["owner"] for condition in protocol.included)}
+    owners = {RECONSTRUCTION_OWNER, *protocol.contributions,
+              *(CONDITIONS[condition]["owner"] for condition in protocol.included)}
     for role in ROLE_LABELS:
         if role not in owners:
             continue
@@ -678,8 +690,8 @@ def money_rules(protocol: Protocol, facts: dict[str, Any]) -> list[dict[str, str
         text = f"{covered}, но реконструкция не выполняется или опаздывает дольше 10 лет → очистные не введены."
     rules = [rule("Деньги и сроки", text, SOURCE_FORMALIZATION)]
     for role in facts["credit"]:
-        credit = protocol.contributions.get(role, 0) + protocol.spent.get(role, 0) - protocol.budgets[role]
-        rules.append(rule("Деньги и сроки", f"{ROLE_LABELS[role]} вносит сверх бюджета: кредит {millions(credit)} "
+        rules.append(rule("Деньги и сроки", f"{ROLE_LABELS[role]} вносит сверх бюджета: кредит "
+                                            f"{millions(protocol.overspend(role))} "
                                             "млн ₽ → долговая нагрузка.", SOURCE_TABLE_5_ECONOMY))
     return rules
 
@@ -690,12 +702,17 @@ def state_rules(state: dict[str, Any]) -> list[dict[str, str]]:
     for subsystem, label in SUBSYSTEM_LABELS.items():
         source, criteria = SUBSYSTEM_CRITERIA[subsystem]
         level = year_10[subsystem]
-        rules.append(rule("Состояние города", f"{label} через 10 лет — {level}: {criteria[level]}.", source))
+        correction = state["year_10"]["corrected"].get(subsystem)
+        if correction:
+            rules.append(rule("Состояние города", f"{label} через 10 лет — {level}: уровень задан условием "
+                                                  "протокола, см. поправку ниже.", CORRECTIONS[correction][1]))
+        else:
+            rules.append(rule("Состояние города", f"{label} через 10 лет — {level}: {criteria[level]}.", source))
     return rules
 
 
 def correction_rules(state: dict[str, Any]) -> list[dict[str, str]]:
-    fired = dict.fromkeys(correction for moment in state.values() for correction in moment["corrections"])
+    fired = dict.fromkeys(correction for moment in state.values() for correction in moment["corrected"].values())
     return [rule("Поправки условий", f"{CORRECTIONS[correction][0]}.", CORRECTIONS[correction][1])
             for correction in fired]
 
@@ -723,7 +740,7 @@ def execute(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
 
     contributions = {role: by_vote(role) for role in protocol.contributions}
     conditions = {condition: by_vote(CONDITIONS[condition]["owner"]) for condition in protocol.included}
-    reconstruction = by_vote(HOLDING)  # реконструкция — обязательство холдинга как владельца срока
+    reconstruction = by_vote(RECONSTRUCTION_OWNER)
     if protocol.accepted and conditions.get(SENSORS) == FULL:
         # Учебник, табл. 5, «Право»: срыв виден, и его исправляют.
         def raised(owner: str, value: str) -> str:
@@ -732,7 +749,7 @@ def execute(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
         contributions = {role: raised(role, value) for role, value in contributions.items()}
         conditions = {condition: value if condition == SENSORS else raised(CONDITIONS[condition]["owner"], value)
                       for condition, value in conditions.items()}
-        reconstruction = raised(HOLDING, reconstruction)
+        reconstruction = raised(RECONSTRUCTION_OWNER, reconstruction)
     return {"contributions": contributions, "conditions": conditions, "reconstruction": reconstruction}
 
 
@@ -797,7 +814,6 @@ def simulate(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
         "paid": paid_in(protocol, execution),
         "contributions": execution["contributions"],
         "conditions": execution["conditions"],
-        "reconstruction": execution["reconstruction"],
         "levels": [*execution["contributions"].values(), *execution["conditions"].values(),
                    execution["reconstruction"]],
         "acting": acting,

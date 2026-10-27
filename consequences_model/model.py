@@ -7,7 +7,8 @@ from typing import Any
 
 from .catalog import (ADMIN, CITY_PAID_ALL_SHARE, CONDITIONS, DELAY_PARTIAL_RECONSTRUCTION, DELAY_UNDERFUNDED, FULL,
                       GUILT, HOLDING, HOLDING_PAID_ALL_SHARE, HORIZON_MONTHS, MIN_COVERAGE_TO_BUILD, NGO, NONE,
-                      OUTCOMES, PAID_PART, PARTIAL, RAISE, RESIDENTS, ROLE_LABELS, SENSORS, WATER)
+                      OUTCOMES, PAID_PART, PARTIAL, RAISE, RECONSTRUCTION_OWNER, RESIDENTS, ROLE_LABELS, SENSORS,
+                      WATER)
 from .explain import fired_rules
 from .protocol import Protocol, read_protocol
 from .report import render_herald_prompt, render_report
@@ -28,7 +29,7 @@ def execute(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
 
     contributions = {role: by_vote(role) for role in protocol.contributions}
     conditions = {condition: by_vote(CONDITIONS[condition]["owner"]) for condition in protocol.included}
-    reconstruction = by_vote(HOLDING)  # реконструкция — обязательство холдинга как владельца срока
+    reconstruction = by_vote(RECONSTRUCTION_OWNER)
     if protocol.accepted and conditions.get(SENSORS) == FULL:
         # Учебник, табл. 5, «Право»: срыв виден, и его исправляют.
         def raised(owner: str, value: str) -> str:
@@ -37,7 +38,7 @@ def execute(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
         contributions = {role: raised(role, value) for role, value in contributions.items()}
         conditions = {condition: value if condition == SENSORS else raised(CONDITIONS[condition]["owner"], value)
                       for condition, value in conditions.items()}
-        reconstruction = raised(HOLDING, reconstruction)
+        reconstruction = raised(RECONSTRUCTION_OWNER, reconstruction)
     return {"contributions": contributions, "conditions": conditions, "reconstruction": reconstruction}
 
 
@@ -102,7 +103,6 @@ def simulate(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
         "paid": paid_in(protocol, execution),
         "contributions": execution["contributions"],
         "conditions": execution["conditions"],
-        "reconstruction": execution["reconstruction"],
         "levels": [*execution["contributions"].values(), *execution["conditions"].values(),
                    execution["reconstruction"]],
         "acting": acting,

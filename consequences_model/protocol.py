@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .catalog import (CONDITION_DEFAULTS, CONDITIONS, GAME_VOTES, GUILT, GUILT_LABELS, PLANT_MODE, PLANT_MODES,
-                      PLANT_REDUCED, ROLE_LABELS, SWITCHES, TIMELINE, TIMELINE_MONTHS)
+                      PLANT_REDUCED, ROLE_LABELS, TIMELINE, TIMELINE_MONTHS, YES_NO_CONDITIONS)
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,7 @@ class Protocol:
     votes: dict[str, bool | None]
     accepted: bool
     budgets: dict[str, float] = field(default_factory=dict)
-    spent: dict[str, float] = field(default_factory=dict)
+    spent_on_conditions: dict[str, float] = field(default_factory=dict)
     warnings: tuple[str, ...] = field(default=())
 
     def supports(self, role: str) -> bool:
@@ -28,18 +28,21 @@ class Protocol:
     def included(self) -> list[str]:
         """Условия, которые стали обязательствами владельцев: включённые «да/нет» и режим комбината 70%."""
         return [condition for condition in CONDITIONS
-                if (condition in SWITCHES and self.conditions[condition] is True)
+                if (condition in YES_NO_CONDITIONS and self.conditions[condition] is True)
                 or (condition == PLANT_MODE and self.conditions[condition] == PLANT_REDUCED)]
 
     @property
     def promised_months(self) -> int:
         return int(self.conditions[TIMELINE])
 
+    def overspend(self, role: str) -> float:
+        """Насколько взнос роли вместе с расходами на условия больше её бюджета."""
+        return self.contributions.get(role, 0) + self.spent_on_conditions.get(role, 0) - self.budgets[role]
+
     @property
     def credit(self) -> list[str]:
         """Роли, чей взнос вместе с расходами на условия больше бюджета: превышение покрыто кредитом."""
-        return [role for role in ROLE_LABELS if role in self.budgets
-                and self.contributions.get(role, 0) + self.spent.get(role, 0) > self.budgets[role]]
+        return [role for role in ROLE_LABELS if role in self.budgets and self.overspend(role) > 0]
 
 
 def valid(condition: str, value: Any) -> bool:
@@ -73,24 +76,24 @@ def read_protocol(game_result: dict[str, Any]) -> Protocol:
         return roles.get(name)
 
     state = game_result["state"]
-    contributions, spent = {}, {}
+    contributions, spent_on_conditions = {}, {}
     for name, record in (state.get("players") or {}).items():
         role = role_of(name)
         if role and record.get("contribution"):
             contributions[role] = record["contribution"]
         if role and record.get("spent_on_levers"):
-            spent[role] = record["spent_on_levers"]
+            spent_on_conditions[role] = record["spent_on_levers"]
 
-    levers = state.get("levers") or {}
+    game_conditions = state.get("levers") or {}
     conditions = {}
     for condition, default in CONDITION_DEFAULTS.items():
-        value = levers.get(condition, default)
+        value = game_conditions.get(condition, default)
         if not valid(condition, value):
             warnings.append(f"Недопустимое значение {value!r} условия «{CONDITIONS[condition]['label']}»: "
                             "взято значение по умолчанию.")
             value = default
         conditions[condition] = value
-    for condition in levers:
+    for condition in game_conditions:
         if condition not in CONDITIONS:
             warnings.append(f"Неизвестное условие {condition}: в прогнозе не учитывается.")
 
@@ -98,9 +101,12 @@ def read_protocol(game_result: dict[str, Any]) -> Protocol:
     votes: dict[str, bool | None] = {role: None for role in ROLE_LABELS}
     for record in (game_result.get("voting_summary") or {}).get("records") or []:
         role = role_of(record.get("player"))
+        if role and record.get("vote") not in GAME_VOTES:
+            warnings.append(f"Неизвестный голос «{record.get('vote')}» у игрока «{record.get('player')}»: считается "
+                            "«воздержался».")
         if role:
             votes[role] = GAME_VOTES.get(record.get("vote"))
 
     return Protocol(game_result["total_cost"], contributions, conditions, votes,
-                    bool(game_result.get("consensus_reached")), budgets, spent,
+                    bool(game_result.get("consensus_reached")), budgets, spent_on_conditions,
                     tuple(dict.fromkeys(warnings)))
