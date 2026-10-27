@@ -31,20 +31,13 @@ services:
       LANGFLOW_SUPERUSER_PASSWORD: change_me_langflow_password
       LANGFLOW_RESTRICT_LOCAL_FILE_ACCESS: "false"
       LANGFLOW_SSRF_ALLOWED_HOSTS: "host.docker.internal"
-      OPENAI_COMPATIBLE_API_KEY: "localai"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LANGFLOW_COMPONENTS_PATH: /app/custom_components
-      PYTHONPATH: /app:/app/custom_components
-      NEGOTIATION_GAMES_DIR: /app/games
       LANGFLOW_WORKER_TIMEOUT: 600
       LANGFLOW_WORKFLOW_EXECUTION_TIMEOUT: 3600
     volumes:
       - langflow_data:/app/langflow
       - ./custom_components:/app/custom_components
-      - ../config:/app/config:ro
-      - ../negotiation_mvp:/app/negotiation_mvp:ro
-      - .:/app/negotiation_flow:ro
-      - ../games:/app/games
 
 volumes:
   postgres_data:
