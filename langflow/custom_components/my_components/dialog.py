@@ -1,7 +1,9 @@
 import base64
 import copy
 import json
+import random
 import re
+import time
 import zlib
 from typing import Any
 
@@ -176,6 +178,10 @@ def _clean_speech_message(msg: str) -> str:
     res = re.sub(r"```[a-zA-Z]*\n?.*?\n?```", "", msg, flags=re.S)
     # Удаление системных баннеров === ... ===
     res = re.sub(r"===\s*.+?\s*===", "", res, flags=re.S)
+    # Удаление любых артефактов чанков RAG [chunk...] и [chunk_id...]
+    res = re.sub(r"\[\s*chunk[^\]]*\]", "", res, flags=re.I)
+    # Удаление тегов <speech> и </speech>
+    res = re.sub(r"</?speech>", "", res, flags=re.I)
 
     # Построчная очистка
     clean_lines = []
@@ -183,19 +189,28 @@ def _clean_speech_message(msg: str) -> str:
         line_s = line.strip()
         if not line_s:
             continue
-        # Пропускаем служебные строки команд
-        if re.match(r"^[\s*+\-]*\b(?:SET|DEMAND|ТРЕБУЮ|TO|ПЕРЕДАТЬ|РЕШЕНИЕ|VOTE|ГОЛОСУЮ)\b", line_s, flags=re.I):
+        # Пропускаем служебные строки команд (включая команды в скобках [SET ...] или (SET ...))
+        if re.match(r"^[\s*+\-]*[\[\(]?\b(?:SET|DEMAND|ТРЕБУЮ|TO|ПЕРЕДАТЬ|РЕШЕНИЕ|VOTE|ГОЛОСУЮ)\b", line_s, flags=re.I):
             continue
+        # Фильтруем утечки системных инструкций и промптов парсера
+        line_s = re.sub(r"(?i)Верни\s+СТРОГО\s+валидный\s+JSON.*", "", line_s).strip()
+        line_s = re.sub(r"(?i)структуры\s+без\s+markdown-оберток.*", "", line_s).strip()
+        line_s = re.sub(r"(?i)Реплика\s+игрока\s*:?", "", line_s).strip()
+        line_s = re.sub(r"(?i)ВЫСТУПЛЕНИЕ\s+УЧАСТНИКА\s*:?", "", line_s).strip()
         # Если строка начинается со SPEAK / СКАЗАТЬ / РЕЧЬ, удаляем этот префикс
         line_s = re.sub(r"^[\s\"\'«»*+\-]*\b(?:SPEAK|СКАЗАТЬ|РЕЧЬ)\b\s*[:\-\—]?\s*", "", line_s, flags=re.I).strip()
         # Удаляем директивы адресации TO @... внутри строки
         line_s = re.sub(r"\bTO\s*@[A-Za-zА-Яа-я0-9_\(\)\s]{2,40}(?:[:,\s\.\!\?]|$)", "", line_s, flags=re.I).strip()
         # Удаляем технические пометки вида (key = value)
         line_s = re.sub(r"\([a-zA-Z0-9_]+\s*=\s*[a-zA-Z0-9_]+\s*(?:,\s*[a-zA-Z0-9_]+\s*=\s*[a-zA-Z0-9_]+\s*)*\)", "", line_s)
-        # Удаляем артефакты chunk_id
-        line_s = re.sub(r"\[chunk_id[^\]]*\]", "", line_s)
-        # Удаляем остатки команд в скобках, например (SET ...) или (DEMAND ...)
-        line_s = re.sub(r"\((?:SET|DEMAND|ТРЕБУЮ)[^\)]*\)", "", line_s, flags=re.I).strip()
+        # Удаляем любые артефакты чанков RAG [chunk...] и [chunk_id...]
+        line_s = re.sub(r"\[chunk[^\]]*\]", "", line_s, flags=re.I)
+        # Удаляем остатки команд в круглых и квадратных скобках, например [SET ...] или (SET ...)
+        line_s = re.sub(r"[\[\(](?:SET|DEMAND|ТРЕБУЮ|VOTE|ГОЛОСУЮ)[^\]\)]*[\]\)]", "", line_s, flags=re.I).strip()
+        # Удаляем незамкнутые скобки команд в конце строк, например: [SET me Взнос 160 млн;
+        line_s = re.sub(r"[\[\(](?:SET|DEMAND|ТРЕБУЮ|VOTE|ГОЛОСУЮ)[^\]\n]*$", "", line_s, flags=re.I).strip()
+        # Удаляем одиночные остаточные команды SET/DEMAND в конце строк
+        line_s = re.sub(r"\b(?:SET|DEMAND|ТРЕБУЮ)\s+(?:me|@[A-Za-zА-Яа-я0-9_]+)[^;\n]*;?$", "", line_s, flags=re.I).strip()
 
         line_s = re.sub(r"[ \t]{2,}", " ", line_s).strip("«»\"' ")
         if line_s and line_s not in {".", ":", "-", "—"}:
@@ -314,7 +329,7 @@ class TwoLLMContractGame(Component):
         )
     ]
 
-    def _invoke_model(self, current: dict, phase: str, turn: int, messages: list):
+    def _invoke_model(self, current: dict, phase: str, turn: int, messages: list, max_retries: int = 5, base_delay: float = 2.0):
         call = {
             "phase": phase,
             "turn": turn,
@@ -322,14 +337,71 @@ class TwoLLMContractGame(Component):
             "messages": [{"role": message.type, "content": str(message.content)} for message in messages],
         }
         self._debug_calls.append(call)
-        try:
-            response = current["llm"].invoke(messages)
-        except Exception as exc:
-            call["error"] = f"{type(exc).__name__}: {exc}"
-            raise
-        content = getattr(response, "content", response)
-        call["response"] = content if isinstance(content, str) else str(content)
-        return response
+
+        delay = base_delay
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = current["llm"].invoke(messages)
+                content = getattr(response, "content", response)
+                call["response"] = content if isinstance(content, str) else str(content)
+                # Пауза между запросами для предотвращения превышения burst-лимитов API (GigaChat / OpenAI)
+                time.sleep(1.0)
+                return response
+            except Exception as exc:
+                err_str = str(exc).lower()
+                err_name = type(exc).__name__
+
+                # Определяем ошибки rate limit (429) или временные сбои шлюза / сети
+                is_rate_limit = (
+                    "429" in err_str
+                    or "rate limit" in err_str
+                    or "ratelimit" in err_name.lower()
+                    or "too many requests" in err_str
+                )
+                is_transient = is_rate_limit or any(
+                    sig in err_str
+                    for sig in [
+                        "500", "502", "503", "504",
+                        "timeout", "timed out", "connection",
+                        "remote disconnected", "server disconnected", "overloaded"
+                    ]
+                )
+
+                if attempt < max_retries and is_transient:
+                    # Извлекаем retry-after если сервер вернул конкретное время ожидания
+                    retry_after = None
+                    resp_obj = getattr(exc, "response", None)
+                    if resp_obj is not None:
+                        hdrs = getattr(resp_obj, "headers", None)
+                        if hdrs:
+                            ra_hdr = hdrs.get("retry-after") or hdrs.get("Retry-After")
+                            if ra_hdr:
+                                try:
+                                    retry_after = float(ra_hdr)
+                                except (ValueError, TypeError):
+                                    pass
+
+                    if retry_after is not None and retry_after > 0:
+                        wait_time = retry_after + random.uniform(0.5, 1.5)
+                    else:
+                        wait_time = delay + random.uniform(0.5, 1.5)
+                        delay *= 2.0
+
+                    call.setdefault("retries", []).append({
+                        "attempt": attempt,
+                        "error": f"{err_name}: {exc}",
+                        "wait_time": round(wait_time, 2),
+                    })
+                    time.sleep(wait_time)
+                else:
+                    call["error"] = f"{err_name}: {exc}"
+                    if is_rate_limit:
+                        raise RuntimeError(
+                            f"Превышен лимит запросов к модели ({err_name}: 429 Rate Limit) для игрока '{current['name']}'. "
+                            f"Было выполнено {attempt} попыток с паузами. Пожалуйста, подождите 1-2 минуты перед повторным запуском "
+                            f"или проверьте квоту/баланс токенов в личном кабинете GigaChat."
+                        ) from exc
+                    raise
 
     def _debug_data(self, history: list, state: dict | None) -> dict:
         return {
@@ -448,6 +520,8 @@ class TwoLLMContractGame(Component):
                 val = min(max_v, val)
             return val
         elif l_type == "str":
+            if raw_val is None or str(raw_val).strip().lower() in {"none", "null", ""}:
+                return lev.get("default", "100%") if lev else "100%"
             low = str(raw_val).lower().strip()
             if any(w in low for w in ["shared", "обоюд", "паритет", "компромисс"]):
                 return "shared"
@@ -455,9 +529,9 @@ class TwoLLMContractGame(Component):
                 return "holding"
             elif any(w in low for w in ["city", "город", "администр"]):
                 return "city"
-            elif "70" in low:
+            elif any(w in low for w in ["70", "семьдесят"]):
                 return "70%"
-            elif "100" in low or "полн" in low:
+            elif any(w in low for w in ["100", "полн", "штатн", "стандарт", "обычн", "неприемлем", "отказ", "не соглас"]):
                 return "100%"
             return str(raw_val).strip(" '\"")
         return raw_val
@@ -548,11 +622,12 @@ class TwoLLMContractGame(Component):
                         "player": speaker,
                     }
                 else:
+                    final_target = target_override if (target_override and not _is_owner(target_override, speaker)) else owner
                     return {
                         "type": "DEMAND_SET",
                         "demand_type": "lever",
                         "from": speaker,
-                        "target": target_override or owner,
+                        "target": final_target,
                         "lever_id": target_lever["id"],
                         "title": target_lever["title"],
                         "value": val,
@@ -569,6 +644,9 @@ class TwoLLMContractGame(Component):
 
         owned_levers = [lev for lev in levers_config if _is_owner(lev.get("owner", ""), speaker)]
         owned_str = ", ".join(f"{l['title']} (ID: {l['id']})" for l in owned_levers) if owned_levers else "нет рычагов в прямом ведении"
+
+        sp_max_b = sp_data.get("max_budget", 0.0)
+        sp_budget_str = _format_money(sp_max_b)
 
         all_players_str = ", ".join(state.get("players", {}).keys())
 
@@ -619,12 +697,13 @@ class TwoLLMContractGame(Component):
 
         human_prompt = (
             f"ТЕКУЩИЙ СПИКЕР: @{speaker}\n"
+            f"Лимит бюджета спикера: {sp_budget_str}\n"
             f"Рычаги в ведении спикера: {owned_str}\n"
             f"Текущий зафиксированный взнос спикера: {cur_contrib_str}\n\n"
             f"ВСЕ СТОРОНЫ: {all_players_str}\n\n"
             f"ДОСТУПНЫЕ ПАРАМЕТРЫ ПРОЕКТА:\n{levers_doc_str}\n\n"
             f"ФИНАНСЫ ПРОЕКТА: Цель: {_format_money(total_cost)} | Собрано: {_format_money(tot_collected)} | Дефицит: {_format_money(tot_deficit)}\n\n"
-            f"ВЫСТУПЛЕНИЕ УЧАСТНИКА:\n{text}\n\n"
+            f"ВЫСТУПЛЕНИЕ УЧАСТНИКА:\n<speech>\n{text}\n</speech>\n\n"
             "Верни СТРОГО валидный JSON следующей структуры без markdown-оберток:\n"
             "{\n"
             '  "own_contribution": <число_млн_или_null>,\n'
@@ -640,7 +719,7 @@ class TwoLLMContractGame(Component):
             '  ],\n'
             '  "withdrawn_demands": ["<имя_стороны_или_рычаг_или_all>"],\n'
             '  "addressed_to": "<имя_стороны_или_null>",\n'
-            '  "clean_speech": "<очищенная речь участника для стенограммы>"\n'
+            '  "clean_speech": "<очищенная прямая речь участника строго из блока <speech> для стенограммы, без технических команд и без служебных инструкций>"\n'
             "}"
         )
 
@@ -773,15 +852,16 @@ class TwoLLMContractGame(Component):
                         p_val = float(d.get("value", 0.0))
                         if 0 < p_val <= 1000 and total_cost > 1000:
                             p_val = p_val * 1_000_000.0
-                        actions.append({
-                            "type": "DEMAND_PLEDGE",
-                            "demand_type": "pledge",
-                            "from": speaker,
-                            "target": resolved_target,
-                            "field": "contribution",
-                            "value": p_val,
-                            "text": d_text or f"Взнос {_format_money(p_val)}",
-                        })
+                        if resolved_target and not _is_owner(resolved_target, speaker):
+                            actions.append({
+                                "type": "DEMAND_PLEDGE",
+                                "demand_type": "pledge",
+                                "from": speaker,
+                                "target": resolved_target,
+                                "field": "contribution",
+                                "value": p_val,
+                                "text": d_text or f"Взнос {_format_money(p_val)}",
+                            })
                     except (ValueError, TypeError):
                         pass
                 else:
@@ -790,19 +870,31 @@ class TwoLLMContractGame(Component):
                     if not lev and d_text:
                         lev = TwoLLMContractGame._find_lever(d_text, levers_config)
                     title = lev["title"] if lev else (l_id or d_text or "Параметр")
-                    target_to_use = resolved_target if resolved_target != "все" else (lev["owner"] if lev else "все")
                     val_norm = TwoLLMContractGame._normalize_lever_value(lev, d.get("value")) if lev else d.get("value")
 
-                    actions.append({
-                        "type": "DEMAND_SET",
-                        "demand_type": "lever",
-                        "from": speaker,
-                        "target": target_to_use,
-                        "lever_id": lev["id"] if lev else str(l_id),
-                        "title": title,
-                        "value": val_norm,
-                        "text": d_text or f"{title}: {val_norm}",
-                    })
+                    if lev and _is_owner(lev["owner"], speaker):
+                        actions.append({
+                            "type": "LEVER_SET",
+                            "lever_id": lev["id"],
+                            "title": lev["title"],
+                            "value": val_norm,
+                            "cost": lev.get("cost", 0.0) if (val_norm is True or (isinstance(val_norm, (int, float)) and val_norm > 0)) else 0.0,
+                            "owner": lev["owner"],
+                            "player": speaker,
+                        })
+                    else:
+                        target_to_use = resolved_target if (resolved_target and resolved_target != "все" and not _is_owner(resolved_target, speaker)) else (lev["owner"] if lev else "все")
+                        if not _is_owner(target_to_use, speaker):
+                            actions.append({
+                                "type": "DEMAND_SET",
+                                "demand_type": "lever",
+                                "from": speaker,
+                                "target": target_to_use,
+                                "lever_id": lev["id"] if lev else str(l_id),
+                                "title": title,
+                                "value": val_norm,
+                                "text": d_text or f"{title}: {val_norm}",
+                            })
 
         # 4. Отозванные или согласованные требования
         withdrawn = data.get("withdrawn_demands") or []
@@ -990,13 +1082,199 @@ class TwoLLMContractGame(Component):
                     d["status"] = "agreed" if curr_val is not None and curr_val == d.get("value") else "pending"
 
     @staticmethod
+    def _validate_and_sanitize_actions(
+        actions: list[dict],
+        speaker: str,
+        state: dict,
+        levers_config: list[dict],
+        total_cost: float,
+    ) -> list[dict]:
+        """
+        Алгоритмический валидатор действий:
+        1. Проверка бюджетов: игрок не может внести больше своего максимального бюджета.
+        2. Финансовые требования к другим сторонам не могут превышать бюджет целевой стороны (если у нее 0, требование отбрасывается).
+        3. Полномочия по рычагам: игрок может устанавливать (LEVER_SET) только свои рычаги.
+        4. Чужие рычаги автоматически конвертируются в требования (DEMAND_SET) строго к владельцу рычага.
+        5. Требования к самому себе отбрасываются или конвертируются в прямое действие.
+        6. Значения рычагов строго валидируются и нормализуются по типу и допустимым значениям (исключая None/'None').
+        """
+        all_names = list(state.get("players", {}).keys())
+        clean_actions = []
+
+        for act in actions:
+            act_type = act.get("type")
+
+            # 1. ВЗНОС СТОРОНЫ
+            if act_type == "PLEDGE_SET":
+                raw_player = act.get("player") or speaker
+                resolved_p = _resolve_player_name(raw_player, all_names) or speaker
+                p_state = state.get("players", {}).get(resolved_p, {})
+                max_b = p_state.get("max_budget")
+
+                try:
+                    val = float(act.get("value", 0.0))
+                except (ValueError, TypeError):
+                    continue
+
+                if 0 < val <= 1000 and total_cost > 1000:
+                    val *= 1_000_000.0
+
+                # Сторона с нулевым бюджетом не может делать взносы
+                if max_b is not None and max_b <= 0:
+                    continue
+
+                # Если взнос превышает бюджет стороны (например, Администрация цитирует 160 млн холдинга):
+                if max_b is not None and val > max_b:
+                    if val > max_b * 1.1:
+                        # Очевидная ссылка на чужой взнос -> отбрасываем
+                        continue
+                    else:
+                        val = max_b
+
+                if val < 0:
+                    continue
+
+                clean_actions.append({
+                    "type": "PLEDGE_SET",
+                    "player": resolved_p,
+                    "field": act.get("field", "contribution"),
+                    "value": val,
+                    "text": act.get("text", f"Взнос {resolved_p}: {_format_money(val)}"),
+                })
+
+            # 2. ТРЕБОВАНИЕ ВЗНОСА К ДРУГОЙ СТОРОНЕ
+            elif act_type == "DEMAND_PLEDGE":
+                from_p = act.get("from") or speaker
+                raw_target = str(act.get("target") or "все").lstrip("@").strip()
+                resolved_t = _resolve_player_name(raw_target, all_names) or raw_target
+
+                if _is_owner(resolved_t, from_p):
+                    continue
+
+                try:
+                    val = float(act.get("value", 0.0))
+                except (ValueError, TypeError):
+                    continue
+
+                if 0 < val <= 1000 and total_cost > 1000:
+                    val *= 1_000_000.0
+
+                target_state = state.get("players", {}).get(resolved_t, {})
+                target_max_b = target_state.get("max_budget")
+
+                # Нельзя требовать деньги от стороны с 0 бюджетом (например, от Эко-НКО или Жителей)
+                if target_max_b is not None and target_max_b <= 0:
+                    continue
+
+                # Ограничиваем требование максимальной вместимостью бюджета целевой стороны
+                if target_max_b is not None and val > target_max_b:
+                    val = target_max_b
+
+                if val <= 0:
+                    continue
+
+                clean_actions.append({
+                    "type": "DEMAND_PLEDGE",
+                    "demand_type": "pledge",
+                    "from": from_p,
+                    "target": resolved_t,
+                    "field": "contribution",
+                    "value": val,
+                    "text": f"Взнос {_format_money(val)}",
+                })
+
+            # 3. ПЕРЕКЛЮЧЕНИЕ РЫЧАГА
+            elif act_type == "LEVER_SET":
+                l_id = act.get("lever_id")
+                lev = TwoLLMContractGame._find_lever(str(l_id), levers_config)
+                if not lev:
+                    continue
+
+                norm_val = TwoLLMContractGame._normalize_lever_value(lev, act.get("value"))
+                if norm_val is None or str(norm_val).strip().lower() in {"none", "null", ""}:
+                    norm_val = lev.get("default")
+
+                if _is_owner(lev["owner"], speaker):
+                    cost = lev.get("cost", 0.0) if (norm_val is True or (isinstance(norm_val, (int, float)) and norm_val > 0)) else 0.0
+                    clean_actions.append({
+                        "type": "LEVER_SET",
+                        "lever_id": lev["id"],
+                        "title": lev["title"],
+                        "value": norm_val,
+                        "cost": cost,
+                        "owner": lev["owner"],
+                        "player": speaker,
+                    })
+                else:
+                    clean_actions.append({
+                        "type": "DEMAND_SET",
+                        "demand_type": "lever",
+                        "from": speaker,
+                        "target": lev["owner"],
+                        "lever_id": lev["id"],
+                        "title": lev["title"],
+                        "value": norm_val,
+                        "text": f"{lev['title']}: {norm_val}",
+                    })
+
+            # 4. ТРЕБОВАНИЕ ПО РЫЧАГУ
+            elif act_type == "DEMAND_SET":
+                from_p = act.get("from") or speaker
+                l_id = act.get("lever_id") or act.get("title")
+                lev = TwoLLMContractGame._find_lever(str(l_id), levers_config)
+                if not lev:
+                    continue
+
+                norm_val = TwoLLMContractGame._normalize_lever_value(lev, act.get("value"))
+                if norm_val is None or str(norm_val).strip().lower() in {"none", "null", ""}:
+                    norm_val = lev.get("default")
+
+                if _is_owner(lev["owner"], from_p):
+                    cost = lev.get("cost", 0.0) if (norm_val is True or (isinstance(norm_val, (int, float)) and norm_val > 0)) else 0.0
+                    clean_actions.append({
+                        "type": "LEVER_SET",
+                        "lever_id": lev["id"],
+                        "title": lev["title"],
+                        "value": norm_val,
+                        "cost": cost,
+                        "owner": lev["owner"],
+                        "player": from_p,
+                    })
+                else:
+                    clean_actions.append({
+                        "type": "DEMAND_SET",
+                        "demand_type": "lever",
+                        "from": from_p,
+                        "target": lev["owner"],
+                        "lever_id": lev["id"],
+                        "title": lev["title"],
+                        "value": norm_val,
+                        "text": f"{lev['title']} ({norm_val})",
+                    })
+
+            elif act_type == "DEMAND_WITHDRAW":
+                clean_actions.append(act)
+
+        return clean_actions
+
+    @staticmethod
     def _apply_actions(state: dict, parsed: dict, target: str | None, total_cost: float, levers_config: list[dict] | None = None) -> dict:
         """Применяет накопленные действия (деньги, крутилки, требования) к состоянию игры."""
         applied_log = []
         speaker = parsed.get("speaker") or list(state.get("players", {}).keys())[0]
         all_names = list(state.get("players", {}).keys())
+        cfg = levers_config or []
 
-        for act in parsed.get("actions", []):
+        # Алгоритмическая валидация и нормализация всех действий
+        validated_actions = TwoLLMContractGame._validate_and_sanitize_actions(
+            actions=parsed.get("actions", []),
+            speaker=speaker,
+            state=state,
+            levers_config=cfg,
+            total_cost=total_cost,
+        )
+
+        for act in validated_actions:
             act_type = act.get("type")
 
             if act_type == "PLEDGE_SET":
@@ -1062,6 +1340,33 @@ class TwoLLMContractGame(Component):
                 title = act.get("title", l_id)
                 val = act.get("value")
 
+                if _is_owner(target_p, from_p):
+                    lev = TwoLLMContractGame._find_lever(l_id or title, levers_config)
+                    if lev and _is_owner(lev["owner"], from_p):
+                        cost = lev.get("cost", 0.0) if (val is True or (isinstance(val, (int, float)) and val > 0)) else 0.0
+                        state.setdefault("levers", {})[lev["id"]] = {
+                            "value": val,
+                            "owner": lev["owner"],
+                            "cost": cost,
+                            "title": lev["title"],
+                            "set_by": from_p,
+                        }
+                        applied_log.append({
+                            "kind": "LEVER",
+                            "lever_id": lev["id"],
+                            "title": lev["title"],
+                            "value": val,
+                            "cost": cost,
+                            "owner": lev["owner"],
+                        })
+                        continue
+                    elif lev:
+                        target_p = lev["owner"]
+                    else:
+                        continue
+                if _is_owner(target_p, from_p):
+                    continue
+
                 demands = state.setdefault("demands", [])
                 existing = next(
                     (d for d in demands if d.get("demand_type") == "lever"
@@ -1099,6 +1404,8 @@ class TwoLLMContractGame(Component):
             elif act_type == "DEMAND_PLEDGE":
                 from_p = act.get("from", speaker)
                 target_p = act.get("target", "")
+                if _is_owner(target_p, from_p):
+                    continue
                 field = act.get("field", "contribution")
                 val = float(act.get("value", 0.0))
                 if 0 < val <= 1000 and total_cost > 1000:
@@ -1300,7 +1607,7 @@ class TwoLLMContractGame(Component):
 
         lines = ["В ВАШЕМ ВЕДЕНИИ НАХОДЯТСЯ СЛЕДУЮЩИЕ ПАРАМЕТРЫ ПРОЕКТА:"]
         for lev in owned:
-            curr_val = current_levers.get(lev["id"], lev["default"])
+            curr_val = current_levers.get(lev["id"], lev.get("default"))
             alias_example = lev["aliases"][0] if lev.get("aliases") else lev["id"]
             cost_info = (
                 f"Стоимость включения: {_format_money(lev['cost'])} (списывается из вашего резерва, не поступает в общий фонд очистных)."
@@ -1368,7 +1675,7 @@ class TwoLLMContractGame(Component):
         current_levers = state.get("levers", {})
         for lev in levers_config:
             lid = lev["id"]
-            val = current_levers.get(lid, lev["default"])
+            val = current_levers.get(lid, lev.get("default"))
             owner = lev["owner"]
             cost_note = f" (списание с бюджета стороны: {_format_money(lev['cost'])})" if lev.get("cost") else ""
 
@@ -1376,7 +1683,8 @@ class TwoLLMContractGame(Component):
                 status_mark = "✅ ВКЛЮЧЕНО" if val else "❌ НЕ ВКЛЮЧЕНО"
                 lines.append(f"  • [{status_mark}] {lev['title']} (В ведении: @{owner}{cost_note})")
             else:
-                lines.append(f"  • ⏱️ Значение: {val} мес. | {lev['title']} (В ведении: @{owner}{cost_note})")
+                unit = " мес." if lev.get("type") == "int" else ""
+                lines.append(f"  • ⏱️ Значение: {val}{unit} | {lev['title']} (В ведении: @{owner}{cost_note})")
 
         demands = state.get("demands", [])
         if demands:
@@ -1423,7 +1731,7 @@ class TwoLLMContractGame(Component):
         current_levers = state.get("levers", {})
         for lev in levers_config:
             lid = lev["id"]
-            val = current_levers.get(lid, lev["default"])
+            val = current_levers.get(lid, lev.get("default"))
             owner = lev["owner"]
             desc = lev.get("description", "")
             cost_info = f" *Затраты стороны @{owner}: {_format_money(lev['cost'])}.*" if lev.get("cost") else ""
@@ -1472,15 +1780,21 @@ class TwoLLMContractGame(Component):
             f"🎯 ПЕРСОНАЛЬНЫЙ ЧЕК-ЛИСТ ДЛЯ СТОРОНЫ: @{speaker}",
             f"1. Твои затраты: взнос {_format_money(my_contrib)} + спецобязательства {_format_money(my_spent_levers)} = {_format_money(my_contrib + my_spent_levers)} (из бюджета {_format_money(base_budget)}).",
             f"2. Твоя доля в управлении: {my_share:g}% (минимум: {attrs.get('min_share', 0):g}%).",
-            f"3. Статус бюджета проекта: {'⚠️ ДЕФИЦИТ ' + _format_money(deficit) + ' (Для вступления Соглашения в силу дефицит должен быть закрыт!)' if deficit > 100_000.0 else '✅ ПОЛНОСТЬЮ ЗАКРЫТ (100% средств обеспечено)'}.",
+            f"3. Статус бюджета проекта: {'⚠️ ДЕФИЦИТ ' + _format_money(deficit) + ' (Принятие с дефицитом допустимо большинством голосов, покрытие ляжет на резервные фонды)' if deficit > 100_000.0 else '✅ ПОЛНОСТЬЮ ЗАКРЫТ (100% средств обеспечено)'}.",
             "4. Статус ключевых нефинансовых пунктов (обрати внимание на утвержденные гарантии в Разделе 2 выше!):",
         ]
         current_levers = state.get("levers", {})
         for lev in levers_config:
-            val = current_levers.get(lev["id"], lev["default"])
-            val_str = "УТВЕРЖДЕНО ✅" if (val is True or (isinstance(val, (int, float)) and val > 0)) else "НЕ ПРИНЯТО ❌"
-            if isinstance(val, (int, float)) and lev["type"] == "int":
-                val_str = f"УТВЕРЖДЕНО ({val} мес.) ✅"
+            val = current_levers.get(lev["id"], lev.get("default"))
+            l_type = lev.get("type", "bool")
+            if l_type == "bool":
+                val_str = "УТВЕРЖДЕНО ✅" if val is True else "НЕ ПРИНЯТО ❌"
+            elif l_type == "int":
+                val_str = f"УТВЕРЖДЕНО ({val} мес.) ✅" if val else "НЕ ПРИНЯТО ❌"
+            elif l_type == "str":
+                val_str = f"УТВЕРЖДЕНО ({val}) ✅" if val and str(val).lower() != "none" else "НЕ ОПРЕДЕЛЕНО ❌"
+            else:
+                val_str = f"УТВЕРЖДЕНО ({val}) ✅" if val else "НЕ ПРИНЯТО ❌"
             lines.append(f"   - {lev['title']}: {val_str}")
 
         my_demands = [d for d in state.get("demands", []) if d.get("from") == speaker]
@@ -1558,6 +1872,8 @@ class TwoLLMContractGame(Component):
             elif k == "DEMAND":
                 d_type = a.get("demand_type")
                 target = a.get("target", "всем")
+                if _is_owner(target, a.get("from", "")):
+                    continue
                 if d_type == "pledge":
                     items.append(f"Требование к @{target}: взнос {_format_money(a.get('value'))}")
                 else:
@@ -1645,8 +1961,13 @@ class TwoLLMContractGame(Component):
             lines.append(
                 f"🎉 **СТАТУС: ПРОТОКОЛ ПРИНЯТ БОЛЬШИНСТВОМ ГОЛОСОВ!**\n"
                 f"* **Итоги голосования:** За: **{votes_for}**, Против: **{votes_against}**, Воздержались: **{votes_abstain}** (Порог большинства: {majority_threshold} из {quorum})\n"
-                f"* **Финансирование:** {_format_money(total_money)} из {_format_money(total_cost)} (Бюджет закрыт на 100%)\n"
+                f"* **Финансирование:** {_format_money(total_money)} из {_format_money(total_cost)} ({((total_money/total_cost)*100) if total_cost else 0:.1f}% от целевой суммы)\n"
             )
+            if deficit > 100_000.0:
+                lines.append(
+                    f"> ⚠️ **Примечание по финансированию:** Проект принят при наличии остаточного дефицита в размере {_format_money(deficit)}. "
+                    f"Недостающие средства подлежат согласованию отдельным протоколом из резервных фондов или дополнительных источников.\n"
+                )
         else:
             reasons = []
             if votes_for < majority_threshold:
@@ -1667,8 +1988,9 @@ class TwoLLMContractGame(Component):
         for name, st in state["players"].items():
             c = st.get("contribution")
             s = st.get("share")
-            c_str = _format_money(c)
-            s_str = f"{s:g}%" if s is not None else "0%"
+            c_val = c if c is not None else 0.0
+            c_str = _format_money(c_val)
+            s_str = f"{s:g}%" if s is not None and s > 0 else "0%"
             if s:
                 total_share += s
             lines.append(f"| **{name}** | {c_str} | {s_str} |")
@@ -1681,17 +2003,35 @@ class TwoLLMContractGame(Component):
         agreed_count = 0
         for lev in levers_config:
             lid = lev["id"]
-            val = current_levers.get(lid, lev["default"])
-            if lev["type"] == "bool":
+            val = current_levers.get(lid, lev.get("default"))
+            l_type = lev.get("type", "bool")
+            title = lev.get("title", lid)
+            owner = lev.get("owner", "")
+            desc = lev.get("description", "")
+            desc_str = f" ({desc})." if desc else "."
+
+            icon = "⚙️"
+            t_lower = title.lower()
+            if "вины" in t_lower or "ответственност" in t_lower:
+                icon = "⚖️"
+            elif "мощност" in t_lower or "пром" in t_lower:
+                icon = "🏭"
+            elif "срок" in t_lower or "график" in t_lower:
+                icon = "⏱️"
+            elif "тариф" in t_lower or "льгот" in t_lower:
+                icon = "💰"
+            elif "датчик" in t_lower or "мониторинг" in t_lower:
+                icon = "📡"
+
+            if l_type == "bool":
                 if val:
-                    agreed_count += 1
-                    desc_str = f" ({lev.get('description')})." if lev.get('description') else '.'
-                    lines.append(f"* ✅ **{lev['title']}:** Подтверждено стороной @{lev['owner']}{desc_str}")
+                    lines.append(f"* ✅ **{title}:** Подтверждено стороной @{owner}{desc_str}")
                 else:
-                    lines.append(f"* ❌ **{lev['title']}:** Не согласовано сторонами.")
+                    lines.append(f"* ❌ **{title}:** Не согласовано сторонами.")
             else:
                 agreed_count += 1
-                lines.append(f"* ⏱️ **{lev['title']}:** Утверждено на уровне: **{val}** (зафиксировано стороной @{lev['owner']}).")
+                unit = " мес." if l_type == "int" else ""
+                lines.append(f"* {icon} **{title}:** Утверждено на уровне: **{val}{unit}** (зафиксировано стороной @{owner}).")
 
         return "\n".join(lines)
 
@@ -1757,6 +2097,21 @@ class TwoLLMContractGame(Component):
                 + "Отреагируй на них: если согласен — подтверди согласие в речи или командой SET. Если не согласен — аргументируй отказ.\n"
             )
 
+        # Анти-повторение: проверяем, говорил ли игрок ранее
+        prev_speeches = [
+            h.get("action", {}).get("message", "")
+            for h in history
+            if h.get("speaker") == speaker and h.get("action", {}).get("message")
+        ]
+        repetition_warning = ""
+        if prev_speeches:
+            repetition_warning = (
+                "\n⚡ ПРАВИЛА ВЕДЕНИЯ ПЕРЕГОВОРОВ И АНТИ-ПОВТОРЕНИЕ:\n"
+                "- Категорически запрещено повторять свою вступительную речь или прошлые реплики слово в слово!\n"
+                "- Развивай диалог: отвечай на реплику собеседника, торгуйся, двигайся навстречу или жестко возражай.\n"
+                "- Не вставляй служебные теги в текст речи (не пиши '[SET me ...]' внутри предложений, говори живо).\n"
+            )
+
         rules_block = f"\n\nРЕГЛАМЕНТ ЗАСЕДАНИЯ:\n{rules_prompt.strip()}" if rules_prompt else ""
         return (
             f"=== 💬 {banner} ===\n\n"
@@ -1767,12 +2122,14 @@ class TwoLLMContractGame(Component):
             f"{TwoLLMContractGame._render_player_levers(speaker, levers_config, state.get('levers', {}))}\n\n"
             f"{TwoLLMContractGame._render_state(state, levers_config, total_cost)}\n\n"
             f"{budget_guidance}"
-            f"{demands_alert}\n"
+            f"{demands_alert}"
+            f"{repetition_warning}\n"
             f"ИСТОРИЯ ПЕРЕГОВОРОВ:\n"
             f"{TwoLLMContractGame._render_history(history)}"
             f"{rules_block}\n\n"
             f"ИНСТРУКЦИЯ К ЭТАПУ 2:\n"
             f"Веди торг, отстаивай интересы своей стороны, предлагай компромиссы или выдвигай требования и ультиматумы.\n"
+            f"ФОКУС НА СТОЛЕ ПЕРЕГОВОРОВ: договаривайся СТРОГО вокруг параметров таблицы выше (взносы сторон, тарифы ЖКХ, эко-датчики 24/7, сроки, мощность завода, налоговые льготы, мораторий на протесты, питьевая вода). Не выдумывай несуществующие внешние структуры (советы, фонды, центры), которых нет на столе переговоров.\n"
             f"Секретарь слушаний зафиксирует все твои слова, взносы и встречные условия в протоколе.\n"
             f"Ты можешь говорить в свободной форме или использовать удобные пометки:\n"
             f"- Свой взнос: прямо в речи ('увеличиваем наш вклад до 120 млн') или 'SET me Взнос <число_в_млн>'.\n"
@@ -1889,15 +2246,16 @@ class TwoLLMContractGame(Component):
         state = {
             "total_cost": total_cost,
             "players": {
-                name: {
+                p["name"]: {
                     "contribution": None,
                     "share": None,
                     "spent_on_levers": 0.0,
+                    "max_budget": float(p["profile"].get("money", 0.0)),
                 }
-                for name in names
+                for p in players
             },
             "levers": {
-                lev["id"]: lev["default"]
+                lev["id"]: lev.get("default")
                 for lev in levers_config
             },
             "demands": [],
@@ -1973,10 +2331,21 @@ class TwoLLMContractGame(Component):
         pending_speaker_idx = None
         dialogue_pairs = []
         turns_silent = {p["name"]: 0 for p in players}
+        last_speaker_name = None
 
         for b_turn in range(max_turns):
             turn_counter += 1
 
+            # 1. Защита от голодания (starvation prevention):
+            # Если кто-то молчит 3 или более раундов, он получает безусловный приоритет на выступление
+            max_silent_turns = max(turns_silent.values()) if turns_silent else 0
+            starved_player = None
+            if max_silent_turns >= 3:
+                candidates = [p_name for p_name in names if turns_silent[p_name] == max_silent_turns and p_name != last_speaker_name]
+                if candidates:
+                    starved_player = candidates[0]
+
+            # 2. Ограничение повтора реплик между одной парой (максимум 2 раза подряд)
             if pending_speaker_idx is not None and len(dialogue_pairs) >= 2:
                 last_s, last_t = dialogue_pairs[-1]
                 if last_t is not None:
@@ -1987,18 +2356,37 @@ class TwoLLMContractGame(Component):
                             recent_count += 1
                         else:
                             break
-                    if recent_count >= 4:
+                    if recent_count >= 2:
                         pending_speaker_idx = None
 
-            if pending_speaker_idx is not None:
-                current_idx = pending_speaker_idx
+            # 3. Определение следующего оратора
+            if starved_player is not None:
+                pending_name = players[pending_speaker_idx]["name"] if pending_speaker_idx is not None else None
+                if pending_name is None or turns_silent[starved_player] > turns_silent.get(pending_name, 0):
+                    current_idx = name_to_idx[starved_player]
+                    pending_speaker_idx = None
+                else:
+                    current_idx = pending_speaker_idx
+                    pending_speaker_idx = None
+            elif pending_speaker_idx is not None:
+                # Cooldown: один и тот же игрок не может говорить два раунда подряд
+                if players[pending_speaker_idx]["name"] == last_speaker_name:
+                    eligible = [p_name for p_name in names if p_name != last_speaker_name]
+                    silent_longest = max(eligible, key=lambda p_name: (turns_silent[p_name], -name_to_idx[p_name]))
+                    current_idx = name_to_idx[silent_longest]
+                else:
+                    current_idx = pending_speaker_idx
                 pending_speaker_idx = None
             else:
-                silent_longest = max(names, key=lambda p_name: (turns_silent[p_name], -name_to_idx[p_name]))
+                eligible = [p_name for p_name in names if p_name != last_speaker_name]
+                if not eligible:
+                    eligible = names
+                silent_longest = max(eligible, key=lambda p_name: (turns_silent[p_name], -name_to_idx[p_name]))
                 current_idx = name_to_idx[silent_longest]
 
             current = players[current_idx]
             speaker = current["name"]
+            last_speaker_name = speaker
 
             for p_name in names:
                 turns_silent[p_name] = 0 if p_name == speaker else turns_silent[p_name] + 1
@@ -2031,8 +2419,9 @@ class TwoLLMContractGame(Component):
                 "Ты участник общественных слушаний по экологическому кризису в городе N. "
                 "ИДЕТ ЭТАП 2: ПЕРЕГОВОРЫ И СОГЛАСОВАНИЕ УСЛОВИЙ. "
                 f"{deficit_clause} "
-                "Веди торг от лица своей роли: заявляй или изменяй свой взнос, переключай доступные условия, "
+                "Веди живой диалог от лица своей роли: заявляй или изменяй свой взнос, переключай доступные условия, "
                 "выдвигай встречные требования и ультиматумы к другим участникам. "
+                "НЕ повторяй свои вступительные речи слово в слово — отвечай на реплики оппонентов и развивай компромисс! "
                 "Обращайся к конкретным сторонам через @Имя или прямо в речи. "
                 "Секретарь слушаний зафиксирует все изменения взносов, параметров и требований в протоколе."
             )
@@ -2229,7 +2618,7 @@ class TwoLLMContractGame(Component):
                 "ВАЖНО: первая строка твоего ответа ОБЯЗАНА быть ровно одной из трёх: "
                 "'РЕШЕНИЕ: ЗА', 'РЕШЕНИЕ: ПРОТИВ' или 'РЕШЕНИЕ: ВОЗДЕРЖАЛСЯ'. "
                 "Нельзя писать оба варианта или менять формат. После РЕШЕНИЕ: — только обоснование. "
-                f"Соглашение вступает в силу ТОЛЬКО при поддержке большинства (не менее {majority_threshold} из {num_players} голосов) и отсутствии дефицита бюджета."
+                f"Соглашение принимается большинством голосов (не менее {majority_threshold} из {num_players}). Дефицит бюджета (при наличии) фиксируется в протоколе для покрытия из резервных фондов."
             )
 
             prompt += "\n\n" + self._rag_context(speaker, current["profile"], history, 3, retrieve=False)
@@ -2243,6 +2632,13 @@ class TwoLLMContractGame(Component):
             command = _clean_command(raw_text)
             vote_decision, vote_comment = self._parse_vote(command)
             vote_comment = _clean_speech_message(vote_comment)
+            if not vote_comment or vote_comment == "Подтверждаю свою позицию и ранее заявленные условия участия.":
+                if vote_decision == "ПРОТИВ":
+                    vote_comment = "Ключевые требования и красные линии стороны не были удовлетворены в итоговом соглашении."
+                elif vote_decision == "ЗА":
+                    vote_comment = "Компромиссные условия соглашения приемлемы для скорейшей реализации проекта."
+                else:
+                    vote_comment = "Поддерживаю необходимость проекта, но сохраняю замечания к отдельным обязательствам."
 
             action = {
                 "type": "VOTE",
@@ -2270,9 +2666,9 @@ class TwoLLMContractGame(Component):
         votes_for = sum(1 for v in voting_records if v["vote"] == "ЗА")
         votes_against = sum(1 for v in voting_records if v["vote"] == "ПРОТИВ")
         votes_abstain = sum(1 for v in voting_records if v["vote"] == "ВОЗДЕРЖАЛСЯ")
-        # Соглашение утверждено ТОЛЬКО при поддержке большинства и отсутствии дефицита бюджета
+        # Протокол принимается демократическим большинством голосов
         budget_closed = (deficit <= 100_000.0)
-        protocol_passed = (votes_for >= majority_threshold) and budget_closed
+        protocol_passed = (votes_for >= majority_threshold)
 
         voting_summary = {
             "records": voting_records,
