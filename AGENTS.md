@@ -30,19 +30,20 @@
 [ADR](docs/adr/). Правила работы с ними: [domain.md](docs/agents/domain.md).
 Учитывайте статус ADR: ADR-0002 и ADR-0003 заменены ADR-0004.
 
-В репозитории две реализации переговоров с разными контрактами результата:
+В текущей версии одна рабочая реализация переговоров — основная игра Langflow.
+Самостоятельный движок удалён; исторические ADR сохраняют описание прежних решений.
 
 | Область | Где начинать | Особенности |
 | --- | --- | --- |
-| Основная игра в Langflow (игра Влада, ADR-0005) | `negotiation_game/langflow_component.py`, класс `NegotiationGame`; `negotiation_game/schemas.py`, `rules.py`; `langflow/Negotiation_MVP_5_players.json` | Схемы и правила отделены от адаптера Langflow (ADR-0006). Результат содержит `state`, `players`, `voting_summary`, `consensus_reached`; условия протокола принадлежат ролям. |
-| Самостоятельный движок (игра Олега) | `negotiation_mvp/cli.py`, `engine.py`, `core.py`; `example_config.json` | Результат содержит `final_state`, `final_scores`, `votes`, `accepted`; используются ответственные за компоненты сметы. `langflow_bridge.py` — адаптер этого движка. |
-| Модель последствий | `consequences_model/protocol.py`, `model.py`, `state.py`, `catalog.py`, `report.py` | Принимает результат основной игры Langflow, а не результат `negotiation_mvp` (ADR-0005). Расчёт детерминированный, LLM только объясняет результат (ADR-0001). |
+| Основная игра | `negotiation_game/langflow_component.py`, `schemas.py`, `rules.py`; `langflow/Negotiation_MVP_5_players.json` | LangChain structured output, нормализация транспортного формата, Pydantic, атомарное применение правил. Результат содержит `state`, `players`, `voting_summary`, `consensus_reached`. |
+| Модель последствий | `consequences_model/protocol.py`, `model.py`, `state.py`, `catalog.py`, `report.py` | Читает итог основной игры (ADR-0005). Расчёт детерминированный; LLM только для пересказа (ADR-0001). |
 | Flow с последствиями | `consequences_model/build_flow.py`; `langflow/Negotiation_MVP_with_consequences.json` | Добавляет модель последствий и ChatOutput к базовому flow. |
-| RAG | `langflow/custom_components/my_components/dialog.py`, `rag.py`; `negotiation_mvp/rag.py`, `rag_policy.py` | Реализации Langflow и самостоятельного движка проверяйте отдельно. Корпус: `full_embeddings.jsonl`, материалы: `rag_docs_gorod_N/`. |
-| Промпты и запуск | `config/`, `langflow/docker-compose.yml` | Сначала проверьте, какой код и какие настройки использует выбранная реализация. |
+| RAG | `langflow/custom_components/my_components/rag.py`; `NegotiationGame._rag_context` | Встроенный корпус и векторы, Chroma, доступ по ролям. Материалы: `rag_docs_gorod_N/`. |
+| Сценарий | PlayerAgent, GameSettings и настройки JSON; `langflow/demo_config.json` | Рабочие настройки проверяйте в выбранном экспорте; demo_config используется отдельным генератором шаблона. |
 
-Не переносите выводы о формате, правилах или RAG одного движка на другой без проверки.
-README описывает оба варианта, но не содержит всей актуальной карты компонентов.
+Отдельного LLM-конвертера и извлечения команд из речи нет. Не возвращайте старый
+текстовый протокол при доработке ответа модели. JSON-декодирование аргументов,
+нормализация и Pydantic необходимы для действующего контракта; это не старые парсеры речи.
 
 ## Исходники и собранные файлы
 
@@ -70,29 +71,24 @@ README описывает оба варианта, но не содержит в
 
 ## Запуск и проверки
 
-Команды ниже выполняются из корня репозитория. Это точки входа из исходников,
-а не утверждение, что окружение настроено или проверки уже прошли.
+Команды выполняются из корня репозитория. Установку зависимостей и обращения
+к внешнему LLM согласуйте в рамках задачи; локальные проверки не вызывают GigaChat.
 
-- Langflow и PostgreSQL описаны в `langflow/docker-compose.yml`; порт Langflow — 7860.
-  Запуск: `docker compose -f langflow/docker-compose.yml up -d`.
-  Команда запускает сервисы и может скачать образы; выполняйте её только в рамках
-  согласованной работы с окружением.
-- Самостоятельный движок: `python -m negotiation_mvp --config example_config.json`.
-  Нужны `PLAYER_MODEL`, `CONVERTER_MODEL` и настройки API из `negotiation_mvp/llm.py`.
-  Запуск вызывает LLM API и записывает отчёты в `games/`.
-- Прогноз по сохранённому результату основной игры:
-  `python -m consequences_model <game-result.json>`; `--json` выводит полный прогноз.
-  Ожидается содержимое `Data.data` оркестратора, не произвольный JSON отчёта.
-- Для выбранной области используйте `python -m unittest discover -s tests -p '<имя файла>'`:
-  `test_mvp.py`, `test_langflow_bridge.py`, `test_langflow_actions.py`,
-  `test_langflow_rag_roles.py`, `test_rag_policy.py`, `test_consequences_model.py`.
-  Полный набор: `python -m unittest discover -s tests`.
-- Тесты последствий проверяют соответствие пакета, собранного компонента и flow;
-  тесты Langflow также исследуют код узлов внутри JSON. Не считайте любое падение
-  дефектом реализации, пока не проверили контракт теста и актуальность экспорта.
-- `langflow/smoke_run.py` вызывает LLM через адаптер `negotiation_mvp` и пишет файлы.
-  Это не полная проверка основного оркестратора. Smoke-скрипты сначала читайте;
-  не запускайте их как заведомо безопасные unit-тесты.
+- Импортируйте нужный JSON в Langflow Desktop. Провайдер и модель задаются в
+  настройках Langflow и PlayerAgent. Локальный Gpt2Giga при существующем окружении:
+  `./.venv/bin/gpt2giga --env-path ./gpt2giga.env`; Base URL — `http://127.0.0.1:8090/v1`.
+- Docker Compose и самостоятельного CLI переговоров в этой версии нет.
+- Проверки контракта и архитектуры: `python -m unittest discover -s tests`.
+- Проверка реальных LFX/ChatOpenAI с HTTP MockTransport:
+  `python tests/verify_lf_player_turn.py` в окружении Langflow.
+- Проверка транспорта, повторов, таймаута и отмены на временном локальном сервере:
+  `python tests/verify_lf_lifecycle.py` в окружении Langflow.
+- Прогноз по сохранённому результату: `python -m consequences_model <game-result.json>`;
+  `--json` выводит полный прогноз. Ожидается содержимое Data.data оркестратора.
+- Сверяйте встроенный код узлов JSON с собранными компонентами. При сетевой ошибке
+  проверяйте отдельно логи прокси и сохранённый debug запуска.
+- Успешные локальные проверки не доказывают корректность речи и голосования реальной
+  модели; качество игрового поведения оценивается отдельно.
 
 ## Тикеты и спецификации
 

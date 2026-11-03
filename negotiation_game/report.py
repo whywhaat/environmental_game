@@ -73,7 +73,7 @@ def render_player_levers(speaker: str, levers_config: list[dict], current_levers
         lines.append(f"• [{lev['title']}]")
         lines.append(f"  - Текущее состояние: {curr_val}")
         lines.append(f"  - Экономика действия: {cost_info}")
-        lines.append(f"  - ID для own_levers: {lev['id']}; тип: {lev['type']}")
+        lines.append(f"  - lever_id для own_conditions: {lev['id']}; тип: {lev['type']}")
         if "allowed" in lev:
             lines.append(f"  - Допустимые значения: {lev['allowed']}")
         if "min_value" in lev or "max_value" in lev:
@@ -117,7 +117,7 @@ def render_calculator(state: dict, total_cost: float) -> str:
         f"│ СТАТУС БЮДЖЕТА:             {deficit_status:<35} │",
         "└─────────────────────────────────────────────────────────────────┘",
         "⚡ ПРАВИЛА КАЛЬКУЛЯТОРА ДЛЯ ВСЕХ УЧАСТНИКОВ:",
-        "1. Юридическую силу имеют ТОЛЬКО взносы из таблицы выше. Речь не меняет обязательства: новый взнос задаётся полем own_contribution_millions.",
+        "1. Юридическую силу имеют ТОЛЬКО взносы из таблицы выше. Речь не меняет обязательства: новый взнос задаётся через own_contribution.action=set и own_contribution.amount_millions (млн рублей).",
         f"2. НЕ СЧИТАЙ В УМЕ! Реальный дефицит проекта прямо сейчас равен РОВНО {format_money(deficit)}.",
         "3. Категорически запрещено заявлять о закрытии дефицита или выходе на целевой бюджет, пока в строке СТАТУС БЮДЖЕТА не появится '100% ЗАКРЫТ'.",
     ])

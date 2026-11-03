@@ -402,6 +402,61 @@ class StructuredTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(model.calls), 1)
         self.assertEqual(self.game._debug_calls[0]["raw_arguments"], payload)
 
+    def test_condition_text_from_real_responses_uses_declared_types(self):
+        for lever, text, expected in (("plant_mode", "70%", "70%"),
+                                      ("guilt", "holding", "holding"),
+                                      ("timeline", "36", 36),
+                                      ("tariffs_freeze", "false", False),
+                                      ("plant_mode", '"70%"', "70%")):
+            with self.subTest(lever=lever, text=text):
+                payload = wire_turn(condition_demands=[dict(target=IDS[1], lever_id=lever,
+                    value_json=text, text="Условие протокола", counter_to="")])
+                decoded, _ = normalize_player_turn(payload, self.state["player_ids"],
+                                                   levers_config=self.conditions)
+                answer = Turn.model_validate(decoded)
+                self.assertEqual(answer.demands[0].value, expected)
+                self.assertIs(type(answer.demands[0].value), type(expected))
+
+    async def test_real_residents_demands_are_accepted_without_extra_json_quotes(self):
+        payload = wire_turn(condition_demands=[
+            dict(target=IDS[0], lever_id="tariffs_freeze", value_json="true", text="Заморозка тарифов", counter_to=""),
+            dict(target=IDS[4], lever_id="open_sensors", value_json="true", text="Открытые датчики", counter_to=""),
+            dict(target=IDS[2], lever_id="guilt", value_json="holding", text="Признать вину холдинга", counter_to="")])
+        model = Model([payload])
+        answer, action = await self.game._structured_turn({**self.players[3], "llm": model},
+            "Вступление", 1, [Message("Позиция жителей")], self.state, self.conditions, self.cost)
+        self.assertIsNotNone(answer)
+        self.assertEqual(len(model.calls), 1)
+        self.assertEqual(len(self.state["demands"]), 3)
+
+    async def test_wrong_condition_owner_still_requires_repair(self):
+        bad = wire_turn(condition_demands=[dict(target=IDS[1], lever_id="open_sensors",
+                                                value_json="true", text="Датчики", counter_to=""),
+            dict(target=IDS[1], lever_id="plant_mode", value_json="70%", text="Мощность", counter_to="")])
+        good = wire_turn(own_conditions=[dict(lever_id="open_sensors", value_json="true")],
+                         condition_demands=[bad["condition_demands"][1]])
+        model = Model([bad, good])
+        answer, action = await self.game._structured_turn({**self.players[4], "llm": model},
+            "Вступление", 1, [Message("Позиция НКО")], self.state, self.conditions, self.cost)
+        self.assertIsNotNone(answer)
+        self.assertEqual(len(model.calls), 2)
+        self.assertIs(self.state["levers"]["open_sensors"], True)
+        self.assertEqual(len(self.state["demands"]), 1)
+        self.assertEqual(self.state["demands"][0]["value"], "70%")
+
+    async def test_unknown_string_condition_value_is_not_guessed(self):
+        bad = wire_turn(condition_demands=[dict(target=IDS[1], lever_id="plant_mode",
+                                                value_json="50%", text="Мощность", counter_to="")])
+        before = copy.deepcopy(self.state)
+        (answer, action), model = await self.request([bad, bad])
+        self.assertIsNone(answer)
+        self.assertEqual(self.state, before)
+
+    def test_calculator_prompt_uses_current_contribution_contract(self):
+        text = NS["render_calculator"](self.state, self.cost)
+        self.assertIn("own_contribution.action=set", text)
+        self.assertNotIn("own_contribution_millions", text)
+
     async def test_wire_zero_is_distinct_from_unchanged(self):
         self.state["players"][NAMES[0]]["contribution"] = 10_000_000
         await self.request([wire_turn()])

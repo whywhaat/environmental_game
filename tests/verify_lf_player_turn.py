@@ -104,6 +104,20 @@ async def verify():
         print("REAL_STACK: артефакты null/все нормализованы до внутренней проверки", flush=True)
 
         validate_reply = True
+        residents = wire_turn()
+        residents["own_contribution"] = dict(action="unchanged", amount_millions=0)
+        residents["condition_demands"] = [
+            dict(target="regional_government", lever_id="guilt", value_json="holding",
+                 text="Признать вину холдинга", counter_to=""),
+            dict(target="industrial_holding", lever_id="plant_mode", value_json="70%",
+                 text="Снизить мощность", counter_to="")]
+        scripted.append(residents)
+        answer, _ = await instance._structured_turn(players[3], "Торг", 3,
+            [HumanMessage(content="Проверка реальных строковых значений")], state, settings["levers"], settings["total_cost"])
+        assert answer is not None
+        assert answer.demands[0].value == "holding" and answer.demands[1].value == "70%"
+        print("REAL_STACK: holding и 70% приняты без дополнительного JSON-кодирования", flush=True)
+
         previous = os.environ.get("NEGOTIATION_GAMES_DIR")
         try:
             with tempfile.TemporaryDirectory(prefix="ecolog-player-turn-") as directory:

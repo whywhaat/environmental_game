@@ -115,7 +115,7 @@ class ContributionInput(TurnSchema):
 class ConditionInput(TurnSchema):
     lever_id: TurnText
     value_json: TurnText = Field(
-        description='Значение как JSON-строка: "true", "24" или строка с JSON-кавычками, например "\\\"70%\\\""'
+        description='Значение условия строкой: true/false, 36, 70% или holding. Строка должна точно соответствовать допустимому значению условия.'
     )
 
 
@@ -201,27 +201,36 @@ def player_turn_tool_schema(player_ids: dict, voting: bool = False,
     return schema
 
 
-def decode_player_turn_input(payload: dict) -> dict:
+def decode_player_turn_input(payload: dict, levers_config: list[dict] | None = None) -> dict:
     """Детерминированный перевод явно заданных действий во внутренний контракт."""
     player_turn_schema()
     wire = PlayerTurnInput.model_validate(payload)
 
-    def value_json(text, path):
+    conditions = {lever["id"]: lever for lever in (levers_config or [])}
+
+    def value_json(text, path, lever_id):
+        condition = conditions.get(lever_id, {})
+        # Это явный выбор из enum строкового условия, без дополнительного
+        # JSON-кодирования. Произвольные строки и значения других типов не угадываем.
+        if condition.get("type") == "str" and text in condition.get("allowed", []):
+            return text
         try:
             return json.loads(text)
         except ValueError as exc:
-            raise ValueError(f"{path}.value_json должен содержать корректное JSON-значение") from exc
+            allowed = condition.get("allowed")
+            hint = f"; допустимые строки: {allowed}" if condition.get("type") == "str" else ""
+            raise ValueError(f"{path}.value_json: неверное значение условия {lever_id}{hint}") from exc
 
     own_levers = {}
     for index, condition in enumerate(wire.own_conditions):
         if condition.lever_id in own_levers:
             raise ValueError(f"own_conditions.{index}.lever_id: повторное изменение одного условия")
-        own_levers[condition.lever_id] = value_json(condition.value_json, f"own_conditions.{index}")
+        own_levers[condition.lever_id] = value_json(condition.value_json, f"own_conditions.{index}", condition.lever_id)
     demands = [{"target": demand.target, "demand_type": "pledge", "lever_id": None,
                 "value": demand.amount_millions, "text": demand.text,
                 "counter_to": demand.counter_to or None} for demand in wire.pledge_demands]
     demands.extend({"target": demand.target, "demand_type": "lever", "lever_id": demand.lever_id,
-                    "value": value_json(demand.value_json, f"condition_demands.{index}"),
+                    "value": value_json(demand.value_json, f"condition_demands.{index}", demand.lever_id),
                     "text": demand.text, "counter_to": demand.counter_to or None}
                    for index, demand in enumerate(wire.condition_demands))
     return {"speech": wire.speech,
@@ -235,7 +244,8 @@ def decode_player_turn_input(payload: dict) -> dict:
 
 
 def normalize_player_turn(payload: dict, player_ids: dict,
-                          audit: list[dict] | None = None) -> tuple[dict, list[dict]]:
+                          audit: list[dict] | None = None,
+                          levers_config: list[dict] | None = None) -> tuple[dict, list[dict]]:
     """Только однозначные преобразования; суммы и смысл действий не исправляются."""
     if not isinstance(payload, dict):
         raise ValueError("PlayerTurn должен быть JSON-объектом")
@@ -280,7 +290,7 @@ def normalize_player_turn(payload: dict, player_ids: dict,
                 value = demand["counter_to"]
                 if value is None or (isinstance(value, str) and value.strip() == "null"):
                     replace(demand, "counter_to", "", f"{key}.{index}.counter_to")
-        normalized = decode_player_turn_input(normalized)
+        normalized = decode_player_turn_input(normalized, levers_config)
         changes.append({"field": "$", "operation": "decode_player_turn_input"})
 
     for key in ("own_contribution_millions", "addressed_to", "vote"):
@@ -298,7 +308,8 @@ def normalize_player_turn(payload: dict, player_ids: dict,
     return normalized, changes
 
 
-def player_turn_examples(player_ids: dict, levers_config: list[dict], voting: bool) -> str:
+def player_turn_examples(player_ids: dict, levers_config: list[dict], voting: bool,
+                         speaker: str | None = None) -> str:
     """Полные образцы синтаксиса, не готовые решения за участника."""
     empty = {"speech": "Публичная позиция участника.",
              "own_contribution": {"action": "unchanged", "amount_millions": 0},
@@ -307,15 +318,16 @@ def player_turn_examples(player_ids: dict, levers_config: list[dict], voting: bo
              "addressed_to": "everyone", "vote": "abstain" if voting else "none"}
     examples = {"голосование" if voting else "без действий": empty}
     if not voting:
-        target = next(iter(player_ids))
-        pledge = copy.deepcopy(empty)
-        pledge["pledge_demands"] = [{"target": target, "amount_millions": 10,
-                                     "text": "Просим взнос 10 млн рублей.", "counter_to": ""}]
-        examples["денежное требование"] = pledge
+        target = next((pid for pid, name in player_ids.items() if name != speaker), None)
+        if target is not None:
+            pledge = copy.deepcopy(empty)
+            pledge["pledge_demands"] = [{"target": target, "amount_millions": 10,
+                                         "text": "Просим взнос 10 млн рублей.", "counter_to": ""}]
+            examples["денежное требование"] = pledge
         # Используем реальное условие и его владельца только как пример формы.
         for lever in levers_config:
             owner_id = next((pid for pid, name in player_ids.items() if name == lever.get("owner")), None)
-            if owner_id and lever.get("type") == "bool":
+            if owner_id and player_ids[owner_id] != speaker and lever.get("type") == "bool":
                 condition = copy.deepcopy(empty)
                 condition["condition_demands"] = [{"target": owner_id, "lever_id": lever["id"],
                     "value_json": "true", "text": "Просим включить условие протокола.", "counter_to": ""}]
@@ -581,7 +593,7 @@ def render_player_levers(speaker: str, levers_config: list[dict], current_levers
         lines.append(f"• [{lev['title']}]")
         lines.append(f"  - Текущее состояние: {curr_val}")
         lines.append(f"  - Экономика действия: {cost_info}")
-        lines.append(f"  - ID для own_levers: {lev['id']}; тип: {lev['type']}")
+        lines.append(f"  - lever_id для own_conditions: {lev['id']}; тип: {lev['type']}")
         if "allowed" in lev:
             lines.append(f"  - Допустимые значения: {lev['allowed']}")
         if "min_value" in lev or "max_value" in lev:
@@ -625,7 +637,7 @@ def render_calculator(state: dict, total_cost: float) -> str:
         f"│ СТАТУС БЮДЖЕТА:             {deficit_status:<35} │",
         "└─────────────────────────────────────────────────────────────────┘",
         "⚡ ПРАВИЛА КАЛЬКУЛЯТОРА ДЛЯ ВСЕХ УЧАСТНИКОВ:",
-        "1. Юридическую силу имеют ТОЛЬКО взносы из таблицы выше. Речь не меняет обязательства: новый взнос задаётся полем own_contribution_millions.",
+        "1. Юридическую силу имеют ТОЛЬКО взносы из таблицы выше. Речь не меняет обязательства: новый взнос задаётся через own_contribution.action=set и own_contribution.amount_millions (млн рублей).",
         f"2. НЕ СЧИТАЙ В УМЕ! Реальный дефицит проекта прямо сейчас равен РОВНО {format_money(deficit)}.",
         "3. Категорически запрещено заявлять о закрытии дефицита или выходе на целевой бюджет, пока в строке СТАТУС БЮДЖЕТА не появится '100% ЗАКРЫТ'.",
     ])
@@ -1296,10 +1308,12 @@ class NegotiationGame(Component):
             "Собственный взнос: own_contribution={action:unchanged, amount_millions:0} — без изменений; "
             "action=set задаёт новый взнос, включая 0 для обнуления. "
             "Собственные условия меняются через own_conditions: список lever_id и value_json. "
+            "Условия своей роли помещай в own_conditions, не требуй их от себя или постороннего участника. "
             "Денежные требования — только pledge_demands с amount_millions. "
             "Требования условий — только condition_demands с lever_id и value_json. "
-            "value_json — строка с JSON-значением: true/false для bool, 24 для int, "
-            "а строковые значения должны содержать JSON-кавычки, например \\\"70%\\\". "
+            "value_json — значение условия строкой: true/false для bool, 24 для int, "
+            "70% или holding для строкового условия. Дополнительные кавычки не нужны. "
+            "condition_demands.target — player_id другого владельца этого условия из списка ниже. "
             "Пустые списки — без действий. "
             "Требования имеют ID от Python. Отвечать может только адресат, отзывать — только автор. "
             "accept не меняет обязательство автоматически: явно заполни собственный взнос или условие. "
@@ -1314,7 +1328,7 @@ class NegotiationGame(Component):
                 [{k: lever.get(k) for k in ("id", "type", "owner", "allowed", "min_value", "max_value")}
                  for lever in contract_levers], ensure_ascii=False)
             + "\nТЕКУЩИЙ ЭТАП: " + ("голосование" if voting else "переговоры, vote=none")
-            + "\n" + player_turn_examples(state["player_ids"], contract_levers, voting)
+            + "\n" + player_turn_examples(state["player_ids"], contract_levers, voting, current["name"])
         )
         request = [SystemMessage(content=contract), *messages]
         wrapped = {**current, "llm": structured}
@@ -1325,7 +1339,7 @@ class NegotiationGame(Component):
                 arguments = self._player_turn_arguments(result)
                 self._debug_calls[-1].update(raw_arguments=copy.deepcopy(arguments), normalization=[])
                 normalized, changes = normalize_player_turn(
-                    arguments, state["player_ids"], self._debug_calls[-1]["normalization"])
+                    arguments, state["player_ids"], self._debug_calls[-1]["normalization"], levers_config)
                 self._debug_calls[-1].update(normalized_arguments=copy.deepcopy(normalized), normalization=changes)
                 answer = player_turn_schema().model_validate(normalized)
                 candidate, action = prepare_player_turn(
@@ -1344,9 +1358,12 @@ class NegotiationGame(Component):
                         + "\nДля обращения ко всем используй addressed_to=everyone. Не угадывай ID. "
                         "Не меняй смысл своей позиции ради валидации. Денежные требования запиши "
                         "в pledge_demands, требования условий — в condition_demands. "
-                        "value_json — JSON-значение внутри строки; counter_to для нового требования — пустая строка. "
+                        "value_json — значение строкой: true, false, 36, 70%, holding. "
+                        "Только точные значения из ограничений условия. "
+                        "Собственные условия запиши в own_conditions, требования — другому владельцу условия. "
+                        "counter_to для нового требования — пустая строка. "
                         + ("На голосовании меняются только speech и vote.\n" if voting else "Вне голосования vote=none.\n")
-                        + player_turn_examples(state["player_ids"], contract_levers, voting))))
+                        + player_turn_examples(state["player_ids"], contract_levers, voting, current["name"]))))
                     continue
                 return None, {"type": "VOTE" if voting else "SKIPPED",
                               "vote": None, "status": "invalid_response", "applied": [],

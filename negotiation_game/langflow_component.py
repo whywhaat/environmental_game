@@ -271,10 +271,12 @@ class NegotiationGame(Component):
             "Собственный взнос: own_contribution={action:unchanged, amount_millions:0} — без изменений; "
             "action=set задаёт новый взнос, включая 0 для обнуления. "
             "Собственные условия меняются через own_conditions: список lever_id и value_json. "
+            "Условия своей роли помещай в own_conditions, не требуй их от себя или постороннего участника. "
             "Денежные требования — только pledge_demands с amount_millions. "
             "Требования условий — только condition_demands с lever_id и value_json. "
-            "value_json — строка с JSON-значением: true/false для bool, 24 для int, "
-            "а строковые значения должны содержать JSON-кавычки, например \\\"70%\\\". "
+            "value_json — значение условия строкой: true/false для bool, 24 для int, "
+            "70% или holding для строкового условия. Дополнительные кавычки не нужны. "
+            "condition_demands.target — player_id другого владельца этого условия из списка ниже. "
             "Пустые списки — без действий. "
             "Требования имеют ID от Python. Отвечать может только адресат, отзывать — только автор. "
             "accept не меняет обязательство автоматически: явно заполни собственный взнос или условие. "
@@ -289,7 +291,7 @@ class NegotiationGame(Component):
                 [{k: lever.get(k) for k in ("id", "type", "owner", "allowed", "min_value", "max_value")}
                  for lever in contract_levers], ensure_ascii=False)
             + "\nТЕКУЩИЙ ЭТАП: " + ("голосование" if voting else "переговоры, vote=none")
-            + "\n" + player_turn_examples(state["player_ids"], contract_levers, voting)
+            + "\n" + player_turn_examples(state["player_ids"], contract_levers, voting, current["name"])
         )
         request = [SystemMessage(content=contract), *messages]
         wrapped = {**current, "llm": structured}
@@ -300,7 +302,7 @@ class NegotiationGame(Component):
                 arguments = self._player_turn_arguments(result)
                 self._debug_calls[-1].update(raw_arguments=copy.deepcopy(arguments), normalization=[])
                 normalized, changes = normalize_player_turn(
-                    arguments, state["player_ids"], self._debug_calls[-1]["normalization"])
+                    arguments, state["player_ids"], self._debug_calls[-1]["normalization"], levers_config)
                 self._debug_calls[-1].update(normalized_arguments=copy.deepcopy(normalized), normalization=changes)
                 answer = player_turn_schema().model_validate(normalized)
                 candidate, action = prepare_player_turn(
@@ -319,9 +321,12 @@ class NegotiationGame(Component):
                         + "\nДля обращения ко всем используй addressed_to=everyone. Не угадывай ID. "
                         "Не меняй смысл своей позиции ради валидации. Денежные требования запиши "
                         "в pledge_demands, требования условий — в condition_demands. "
-                        "value_json — JSON-значение внутри строки; counter_to для нового требования — пустая строка. "
+                        "value_json — значение строкой: true, false, 36, 70%, holding. "
+                        "Только точные значения из ограничений условия. "
+                        "Собственные условия запиши в own_conditions, требования — другому владельцу условия. "
+                        "counter_to для нового требования — пустая строка. "
                         + ("На голосовании меняются только speech и vote.\n" if voting else "Вне голосования vote=none.\n")
-                        + player_turn_examples(state["player_ids"], contract_levers, voting))))
+                        + player_turn_examples(state["player_ids"], contract_levers, voting, current["name"]))))
                     continue
                 return None, {"type": "VOTE" if voting else "SKIPPED",
                               "vote": None, "status": "invalid_response", "applied": [],
