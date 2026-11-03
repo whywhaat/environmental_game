@@ -1,20 +1,118 @@
 import base64
 import copy
 import json
+import math
 import random
-import re
 import time
 import zlib
-from typing import Any
+from typing import Annotated, Any, Literal
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+    model_validator,
+)
+from langchain_core.exceptions import OutputParserException
 
 from lfx.custom import Component
-from lfx.io import DataInput, HandleInput, IntInput, MultilineInput, Output
-from langchain_core.messages import AIMessage
+from lfx.io import DataInput, IntInput, MultilineInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 from langchain_core.messages import HumanMessage, SystemMessage
 
 DEFAULT_PROJECT_COST = 270_000_000.0  # 270 млн руб. по умолчанию
+
+# Схемы находятся рядом с компонентом, чтобы код узла можно было переносить
+# в JSON Langflow без импорта дополнительного локального пакета.
+PlayerId = Annotated[StrictStr, Field(min_length=1)]
+DemandId = Annotated[StrictStr, Field(min_length=1)]
+TurnText = Annotated[StrictStr, Field(min_length=1)]
+AmountMillions = Annotated[StrictFloat, Field(ge=0, allow_inf_nan=False)]
+LeverValue = StrictBool | StrictInt | TurnText
+DemandValue = LeverValue | StrictFloat
+Vote = Literal["for", "against", "abstain"]
+DemandDecision = Literal["accept", "reject", "counter"]
+
+
+class TurnSchema(BaseModel):
+    """Общие ограничения структурированного ответа игрока (Pydantic v2)."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        allow_inf_nan=False,
+    )
+
+
+class Demand(TurnSchema):
+    """Новое требование; его ID назначает Python после проверки хода."""
+
+    target: PlayerId = Field(description="Стабильный player_id адресата требования")
+    demand_type: Literal["pledge", "lever"]
+    lever_id: TurnText | None = Field(
+        description="ID условия протокола для lever; null для pledge"
+    )
+    value: DemandValue = Field(
+        description="Для pledge — сумма в млн рублей; для lever — значение условия"
+    )
+    text: TurnText = Field(description="Краткая суть требования")
+    counter_to: DemandId | None = Field(
+        description="ID исходного требования для встречного предложения; иначе null"
+    )
+
+    @model_validator(mode="after")
+    def validate_demand(self) -> "Demand":
+        if self.demand_type == "pledge":
+            if self.lever_id is not None:
+                raise ValueError("Для pledge lever_id должен быть null")
+            # bool является подклассом int, но денежной суммой не является.
+            if type(self.value) not in (int, float) or self.value < 0:
+                raise ValueError("Для pledge value — неотрицательное число миллионов")
+        else:
+            if self.lever_id is None:
+                raise ValueError("Для lever требуется lever_id")
+            if type(self.value) not in (bool, int, str):
+                raise ValueError("Для lever value должен иметь тип bool, int или str")
+        return self
+
+
+class DemandResponse(TurnSchema):
+    """Решение адресата по конкретному требованию; обязательства не меняет."""
+
+    demand_id: DemandId
+    decision: DemandDecision
+
+
+class PlayerTurn(TurnSchema):
+    """Ответ игрока. Все поля обязательны, отсутствие действия задаётся явно.
+
+    Существование ID, права игрока, соответствие этапу и согласованность действий
+    требуют отдельной проверки по состоянию игры до атомарного применения хода.
+    """
+
+    speech: TurnText = Field(description="Публичная речь игрока без технических команд")
+    own_contribution_millions: AmountMillions | None = Field(
+        description="Новый собственный взнос в млн рублей; null — без изменений; 0 — обнулить"
+    )
+    own_levers: dict[TurnText, LeverValue] = Field(
+        description="Изменения собственных условий по их ID; пустой объект — без изменений"
+    )
+    demands: list[Demand] = Field(description="Новые требования и встречные предложения")
+    responses: list[DemandResponse] = Field(description="Ответы на адресованные игроку требования")
+    withdrawn_demands: list[DemandId] = Field(description="ID отзываемых собственных требований")
+    addressed_to: PlayerId | None = Field(
+        description="player_id адресата публичной реплики; null — обращение ко всем"
+    )
+    vote: Vote | None = Field(
+        description="Голос по итоговому протоколу; вне финального голосования — null"
+    )
+
 
 RAG_ROLE_BY_PLAYER_ID = {
     "city_administration": "admin",
@@ -148,97 +246,6 @@ def _get_default_settings() -> dict:
     }
 
 
-def _extract_text(content) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict):
-                parts.append(str(item.get("text", "")))
-            elif hasattr(item, "text"):
-                parts.append(str(item.text))
-            else:
-                parts.append(str(item))
-        return "".join(parts).strip()
-    return str(content).strip()
-
-
-def _clean_command(raw_text: str) -> str:
-    text = raw_text.strip()
-    text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text).strip()
-    text = re.sub(r"^`|`$", "", text).strip()
-    return text
-
-
-def _clean_speech_message(msg: str) -> str:
-    if not msg:
-        return ""
-    # Удаление markdown-блоков кода
-    res = re.sub(r"```[a-zA-Z]*\n?.*?\n?```", "", msg, flags=re.S)
-    # Удаление системных баннеров === ... ===
-    res = re.sub(r"===\s*.+?\s*===", "", res, flags=re.S)
-    # Удаление любых артефактов чанков RAG [chunk...] и [chunk_id...]
-    res = re.sub(r"\[\s*chunk[^\]]*\]", "", res, flags=re.I)
-    # Удаление тегов <speech> и </speech>
-    res = re.sub(r"</?speech>", "", res, flags=re.I)
-
-    # Построчная очистка
-    clean_lines = []
-    for line in res.splitlines():
-        line_s = line.strip()
-        if not line_s:
-            continue
-        # Пропускаем служебные строки команд (включая команды в скобках [SET ...] или (SET ...))
-        if re.match(r"^[\s*+\-]*[\[\(]?\b(?:SET|DEMAND|ТРЕБУЮ|TO|ПЕРЕДАТЬ|РЕШЕНИЕ|VOTE|ГОЛОСУЮ)\b", line_s, flags=re.I):
-            continue
-        # Фильтруем утечки системных инструкций и промптов парсера
-        line_s = re.sub(r"(?i)Верни\s+СТРОГО\s+валидный\s+JSON.*", "", line_s).strip()
-        line_s = re.sub(r"(?i)структуры\s+без\s+markdown-оберток.*", "", line_s).strip()
-        line_s = re.sub(r"(?i)Реплика\s+игрока\s*:?", "", line_s).strip()
-        line_s = re.sub(r"(?i)ВЫСТУПЛЕНИЕ\s+УЧАСТНИКА\s*:?", "", line_s).strip()
-        # Если строка начинается со SPEAK / СКАЗАТЬ / РЕЧЬ, удаляем этот префикс
-        line_s = re.sub(r"^[\s\"\'«»*+\-]*\b(?:SPEAK|СКАЗАТЬ|РЕЧЬ)\b\s*[:\-\—]?\s*", "", line_s, flags=re.I).strip()
-        # Удаляем директивы адресации TO @... внутри строки
-        line_s = re.sub(r"\bTO\s*@[A-Za-zА-Яа-я0-9_\(\)\s]{2,40}(?:[:,\s\.\!\?]|$)", "", line_s, flags=re.I).strip()
-        # Удаляем технические пометки вида (key = value)
-        line_s = re.sub(r"\([a-zA-Z0-9_]+\s*=\s*[a-zA-Z0-9_]+\s*(?:,\s*[a-zA-Z0-9_]+\s*=\s*[a-zA-Z0-9_]+\s*)*\)", "", line_s)
-        # Удаляем любые артефакты чанков RAG [chunk...] и [chunk_id...]
-        line_s = re.sub(r"\[chunk[^\]]*\]", "", line_s, flags=re.I)
-        # Удаляем остатки команд в круглых и квадратных скобках, например [SET ...] или (SET ...)
-        line_s = re.sub(r"[\[\(](?:SET|DEMAND|ТРЕБУЮ|VOTE|ГОЛОСУЮ)[^\]\)]*[\]\)]", "", line_s, flags=re.I).strip()
-        # Удаляем незамкнутые скобки команд в конце строк, например: [SET me Взнос 160 млн;
-        line_s = re.sub(r"[\[\(](?:SET|DEMAND|ТРЕБУЮ|VOTE|ГОЛОСУЮ)[^\]\n]*$", "", line_s, flags=re.I).strip()
-        # Удаляем одиночные остаточные команды SET/DEMAND в конце строк
-        line_s = re.sub(r"\b(?:SET|DEMAND|ТРЕБУЮ)\s+(?:me|@[A-Za-zА-Яа-я0-9_]+)[^;\n]*;?$", "", line_s, flags=re.I).strip()
-
-        line_s = re.sub(r"[ \t]{2,}", " ", line_s).strip("«»\"' ")
-        if line_s and line_s not in {".", ":", "-", "—"}:
-            clean_lines.append(line_s)
-
-    res = "\n".join(clean_lines).strip()
-    if not res:
-        res = "Подтверждаю свою позицию и ранее заявленные условия участия."
-    return res
-
-
-def _resolve_player_name(target_str: str | None, all_player_names: list[str]) -> str | None:
-    if not target_str:
-        return None
-    target_clean = re.sub(r"^@+", "", str(target_str)).strip().lower()
-    # 1. Прямое совпадение
-    for name in all_player_names:
-        if name.lower() == target_clean:
-            return name
-    # 2. Семантическое совпадение ролей (_is_owner)
-    for name in all_player_names:
-        if _is_owner(name, target_clean):
-            return name
-    # 3. Вхождение подстроки
-    for name in all_player_names:
-        if len(target_clean) >= 3 and (target_clean in name.lower() or name.lower() in target_clean):
-            return name
-    return None
 def _format_money(amount) -> str:
     if amount is None:
         return "—"
@@ -254,7 +261,6 @@ def _format_money(amount) -> str:
     if abs(val) > 0:
         return f"{int(val):,} руб.".replace(",", " ")
     return "0 руб."
-
 
 
 def _is_owner(owner: str, speaker: str) -> bool:
@@ -311,13 +317,6 @@ class TwoLLMContractGame(Component):
             info="Параметры сценария, бюджет и переговорные условия (опционально)",
             required=False,
         ),
-        HandleInput(
-            name="converter_model",
-            display_name="Модель парсера / конвертера (опционально)",
-            info="Выделенная LLM для парсинга реплик, извлечения требований и нормализации действий",
-            input_types=["LanguageModel"],
-            required=False,
-        ),
     ]
 
     outputs = [
@@ -328,6 +327,203 @@ class TwoLLMContractGame(Component):
             types=["Data"],
         )
     ]
+
+    @staticmethod
+    def _prepare_player_turn(answer: PlayerTurn, speaker: str, state: dict,
+                             levers_config: list[dict], total_cost: float,
+                             voting: bool = False) -> tuple[dict, dict]:
+        """Проверяет ход на копии. Исходное состояние не меняется даже при ошибке."""
+        names_by_id = state["player_ids"]
+        if speaker not in names_by_id.values():
+            raise ValueError("Неизвестный игрок")
+        if answer.addressed_to is not None and answer.addressed_to not in names_by_id:
+            raise ValueError("addressed_to должен содержать известный player_id")
+        target = names_by_id.get(answer.addressed_to)
+        if voting:
+            if answer.vote is None:
+                raise ValueError("На голосовании требуется for, against или abstain")
+            if (answer.own_contribution_millions is not None or answer.own_levers
+                    or answer.demands or answer.responses or answer.withdrawn_demands
+                    or answer.addressed_to is not None):
+                raise ValueError("На голосовании разрешены только speech и vote")
+            return copy.deepcopy(state), {
+                "type": "VOTE", "vote": {"for": "ЗА", "against": "ПРОТИВ",
+                                          "abstain": "ВОЗДЕРЖАЛСЯ"}[answer.vote],
+                "comment": answer.speech, "message": answer.speech, "status": "ok",
+            }
+        if answer.vote is not None:
+            raise ValueError("Вне голосования vote должен быть null")
+
+        candidate = copy.deepcopy(state)
+        applied = []
+        conditions = {lev["id"]: lev for lev in levers_config}
+
+        def money(value, player):
+            rubles = value * 1_000_000.0
+            if not math.isfinite(rubles):
+                raise ValueError("Сумма слишком велика")
+            budget = state["players"][player].get("max_budget")
+            if budget is not None and rubles > budget:
+                raise ValueError(f"Взнос {player} превышает бюджет")
+            return rubles
+
+        def condition_value(lever_id, value, owner):
+            lev = conditions.get(lever_id)
+            if lev is None:
+                raise ValueError(f"Неизвестное условие {lever_id}")
+            if not _is_owner(lev["owner"], owner):
+                raise ValueError(f"Условие {lever_id} не принадлежит {owner}")
+            expected = {"bool": bool, "int": int, "str": str}.get(lev["type"])
+            if expected is None or type(value) is not expected:
+                raise ValueError(f"Неверный тип значения условия {lever_id}")
+            if "allowed" in lev and value not in lev["allowed"]:
+                raise ValueError(f"Недопустимое значение условия {lever_id}")
+            if expected is int and not lev.get("min_value", value) <= value <= lev.get("max_value", value):
+                raise ValueError(f"Значение {lever_id} вне допустимого диапазона")
+            return lev
+
+        if answer.own_contribution_millions is not None:
+            value = money(answer.own_contribution_millions, speaker)
+            candidate["players"][speaker].update(
+                contribution=value, share=round(value / total_cost * 100, 2) if total_cost else 0.0)
+            applied.append({"kind": "PLEDGE", "player": speaker, "contribution": value,
+                            "share": candidate["players"][speaker]["share"]})
+        for lever_id, value in answer.own_levers.items():
+            lev = condition_value(lever_id, value, speaker)
+            candidate["levers"][lever_id] = value
+            applied.append({"kind": "LEVER", "lever_id": lever_id,
+                            "title": lev["title"], "value": value})
+        # Пересчитываем расходы по всем включённым собственным условиям.
+        candidate["players"][speaker]["spent_on_levers"] = sum(
+            float(lev.get("cost", 0)) for lev in levers_config
+            if _is_owner(lev["owner"], speaker)
+            and (candidate["levers"].get(lev["id"]) is True
+                 or (type(candidate["levers"].get(lev["id"])) is int
+                     and candidate["levers"][lev["id"]] > 0)))
+
+        existing = {d["id"]: d for d in candidate["demands"]}
+        response_ids = [r.demand_id for r in answer.responses]
+        if len(response_ids) != len(set(response_ids)):
+            raise ValueError("Нельзя дважды ответить на одно требование в одном ходе")
+        if len(answer.withdrawn_demands) != len(set(answer.withdrawn_demands)):
+            raise ValueError("Повторяющийся ID отзываемого требования")
+        counters = {r.demand_id for r in answer.responses if r.decision == "counter"}
+        counter_links = {d.counter_to for d in answer.demands if d.counter_to is not None}
+        if counters != counter_links:
+            raise ValueError("Каждый counter требует нового demands с соответствующим counter_to")
+
+        for response in answer.responses:
+            demand = existing.get(response.demand_id)
+            if demand is None or demand.get("withdrawn"):
+                raise ValueError(f"Требование {response.demand_id} не существует или отозвано")
+            if demand["target"] != speaker:
+                raise ValueError("Ответить на требование может только его адресат")
+            if response.decision == "accept":
+                if demand["demand_type"] == "pledge":
+                    if answer.own_contribution_millions is None or not math.isclose(
+                            candidate["players"][speaker]["contribution"], demand["value"], abs_tol=1e-6):
+                        raise ValueError("accept требует явно указать согласованный собственный взнос")
+                elif (demand["lever_id"] not in answer.own_levers
+                      or answer.own_levers[demand["lever_id"]] != demand["value"]):
+                    raise ValueError("accept требует явно указать согласованное собственное условие")
+            demand["response"] = response.decision
+            applied.append({"kind": "DEMAND_RESPONSE", "demand_id": response.demand_id,
+                            "decision": response.decision})
+        for demand_id in answer.withdrawn_demands:
+            demand = existing.get(demand_id)
+            if demand is None or demand["from"] != speaker or demand.get("withdrawn"):
+                raise ValueError("Отозвать можно только существующее собственное требование")
+            demand.update(withdrawn=True, status="withdrawn")
+            applied.append({"kind": "DEMAND_WITHDRAWN", "demand_id": demand_id})
+
+        for demand in answer.demands:
+            if demand.target not in names_by_id:
+                raise ValueError(f"Неизвестный player_id {demand.target}")
+            recipient = names_by_id[demand.target]
+            if recipient == speaker:
+                raise ValueError("Нельзя адресовать требование самому себе")
+            if demand.counter_to is not None and recipient != existing[demand.counter_to]["from"]:
+                raise ValueError("Встречное предложение адресуется автору исходного требования")
+            if demand.demand_type == "pledge":
+                value = money(demand.value, recipient)
+                title = "Взнос"
+            else:
+                lev = condition_value(demand.lever_id, demand.value, recipient)
+                value, title = demand.value, lev["title"]
+            # counter_to ссылается на проверенный выше ответ адресата.
+            seq = candidate.get("next_demand_id", 1)
+            demand_id = f"d{seq}"
+            candidate["next_demand_id"] = seq + 1
+            record = {"id": demand_id, "from": speaker, "target": recipient,
+                      "target_id": demand.target, "demand_type": demand.demand_type,
+                      "lever_id": demand.lever_id, "value": value, "text": demand.text,
+                      "title": title, "counter_to": demand.counter_to, "status": "pending"}
+            candidate["demands"].append(record)
+            applied.append({"kind": "DEMAND", **copy.deepcopy(record)})
+
+        # Статус согласования следует фактическим обязательствам, а не одной реплике.
+        for demand in candidate["demands"]:
+            if demand.get("withdrawn"):
+                continue
+            if demand["demand_type"] == "pledge":
+                contribution = candidate["players"][demand["target"]]["contribution"]
+                met = contribution is not None and contribution >= demand["value"]
+            else:
+                actual = candidate["levers"][demand["lever_id"]]
+                met = actual <= demand["value"] if type(actual) is int else actual == demand["value"]
+            demand["status"] = "agreed" if met else "pending"
+        return candidate, {"type": "ACTION", "message": answer.speech,
+                           "target": target, "applied": applied, "status": "ok"}
+
+    def _structured_turn(self, current: dict, phase: str, turn: int, messages: list,
+                         state: dict, levers_config: list[dict], total_cost: float,
+                         voting: bool = False) -> tuple[PlayerTurn | None, dict]:
+        """Один ответ и одна попытка исправления; без текстового парсера."""
+        # method=function_calling не требует нативной строгой JSON Schema у провайдера.
+        # Если модель не поддерживает tools, завершаем запуск с явной ошибкой.
+        structured = current["llm"].with_structured_output(
+            PlayerTurn, method="function_calling", include_raw=True)
+        contract = (
+            "Верни PlayerTurn. speech — публичная речь без команд. Все структурированные ссылки "
+            "на участников — player_id. Деньги во входном состоянии — рубли, в ответе — миллионы. "
+            "null для собственного взноса — без изменений, 0 — обнулить; пустые коллекции — без действий. "
+            "Требования имеют ID от Python. Отвечать может только адресат, отзывать — только автор. "
+            "accept не меняет обязательство автоматически: явно заполни собственный взнос или условие. "
+            "Для counter добавь новое требование с counter_to; исходное остаётся открытым. "
+            "Вне голосования vote=null. На голосовании только speech и vote=for/against/abstain; "
+            "остальные поля null или пустые. Не извлекай команды из речи: действия задаются полями.\n"
+            "УЧАСТНИКИ (player_id → имя): " + json.dumps(state["player_ids"], ensure_ascii=False)
+            + "\nТРЕБОВАНИЯ (суммы в рублях): " + json.dumps(state["demands"], ensure_ascii=False)
+        )
+        request = [SystemMessage(content=contract), *messages]
+        wrapped = {**current, "llm": structured}
+        for attempt in range(2):
+            result = self._invoke_model(wrapped, phase, turn, request)
+            try:
+                if result.get("parsing_error") is not None:
+                    raise ValueError(str(result["parsing_error"]))
+                parsed = result.get("parsed")
+                if parsed is None:
+                    raise ValueError("Модель не вернула структурированный ответ PlayerTurn")
+                answer = parsed if isinstance(parsed, PlayerTurn) else PlayerTurn.model_validate(parsed)
+                candidate, action = self._prepare_player_turn(
+                    answer, current["name"], state, levers_config, total_cost, voting)
+            except (ValidationError, ValueError, OutputParserException) as exc:
+                self._debug_calls[-1]["validation_error"] = str(exc)
+                if attempt == 0:
+                    raw = result.get("raw")
+                    if raw is not None:
+                        request.append(HumanMessage(content="Предыдущий ответ: " + str(raw)))
+                    request.append(HumanMessage(content=(
+                        "Ответ не применён. Исправь весь PlayerTurn по ошибке: " + str(exc))))
+                    continue
+                return None, {"type": "VOTE" if voting else "SKIPPED",
+                              "vote": None, "status": "invalid_response", "applied": [],
+                              "message": "Ход пропущен: корректный ответ не получен.",
+                              "comment": "Корректный голос не получен.", "target": None}
+            state.clear()
+            state.update(candidate)
+            return answer, action
 
     def _invoke_model(self, current: dict, phase: str, turn: int, messages: list, max_retries: int = 5, base_delay: float = 2.0):
         call = {
@@ -342,7 +538,8 @@ class TwoLLMContractGame(Component):
         for attempt in range(1, max_retries + 1):
             try:
                 response = current["llm"].invoke(messages)
-                content = getattr(response, "content", response)
+                raw = response.get("raw") if isinstance(response, dict) else response
+                content = raw.model_dump(mode="json") if isinstance(raw, BaseModel) else getattr(raw, "content", raw)
                 call["response"] = content if isinstance(content, str) else str(content)
                 # Пауза между запросами для предотвращения превышения burst-лимитов API (GigaChat / OpenAI)
                 time.sleep(1.0)
@@ -415,1066 +612,7 @@ class TwoLLMContractGame(Component):
             "last_state": copy.deepcopy(state),
         }
 
-    # Парсинг
 
-    @staticmethod
-    def _extract_addressed_player(text: str, current_speaker: str, all_player_names: list) -> str | None:
-        if not text:
-            return None
-
-        # 1. Приоритет: явная директива TO @... или ПЕРЕДАТЬ @...
-        to_match = re.search(r"(?:TO|ПЕРЕДАТЬ|СЛОВО|ВОПРОС|К)\s*@([A-Za-zА-Яа-я0-9_\(\)\s]{2,40})(?:[:,\s\.\!\?]|$)", text, re.I)
-        candidates_raw = []
-        if to_match:
-            candidates_raw.append(to_match.group(1))
-
-        # 2. Все @mentions в порядке появления в тексте
-        general_matches = re.findall(r"@([A-Za-zА-Яа-я0-9_\(\)\s]{2,40})(?:[:,\s\.\!\?]|$)", text)
-        candidates_raw.extend(general_matches)
-
-        for raw in candidates_raw:
-            cand = raw.strip().lower()
-            for p_name in all_player_names:
-                if p_name == current_speaker:
-                    continue
-                if cand == p_name.lower() or cand in p_name.lower() or p_name.lower() in cand:
-                    return p_name
-
-        return None
-
-    @staticmethod
-    def _parse_vote(text: str) -> tuple[str, str]:
-        clean = text.strip()
-
-        def _normalize(dec: str) -> str:
-            d = dec.upper()
-            if d in {"ЗА", "ACCEPT"}:
-                return "ЗА"
-            if d in {"ПРОТИВ", "REJECT"}:
-                return "ПРОТИВ"
-            return "ВОЗДЕРЖАЛСЯ"
-
-        # Приоритет 1: строка РЕШЕНИЕ: (явный итоговый вердикт)
-        m = re.search(r"^\s*РЕШЕНИЕ\s*[:—–-]?\s*(ЗА|ПРОТИВ|ВОЗДЕРЖАЛСЯ)\b", clean, re.I | re.M)
-        if m:
-            comment = re.sub(r"^\s*РЕШЕНИЕ\s*[:—–-]?\s*(?:ЗА|ПРОТИВ|ВОЗДЕРЖАЛСЯ)[:\s—–-]*", "", clean, flags=re.I).strip()
-            return _normalize(m.group(1)), comment or clean
-
-        # Приоритет 2: ПЕРВАЯ строка начинающаяся с VOTE/ГОЛОСУЮ/ГОЛОС
-        # Исключаем "(только для справки)" — это не голос
-        m = re.search(
-            r"^\s*(?:VOTE|ГОЛОСУЮ|ГОЛОС)\s*[:—–-]?\s*(ЗА|ПРОТИВ|ВОЗДЕРЖАЛСЯ|ACCEPT|REJECT)\b(?!\s*\(только)",
-            clean, re.I | re.M
-        )
-        if m:
-            comment = re.sub(r"^\s*(?:VOTE|ГОЛОСУЮ|ГОЛОС)\s*[:—–-]?\s*(?:ЗА|ПРОТИВ|ВОЗДЕРЖАЛСЯ|ACCEPT|REJECT)[:\s—–-]*", "", clean, flags=re.I).strip()
-            return _normalize(m.group(1)), comment or clean
-
-        # Приоритет 3: первое inline-упоминание голосую/vote
-        m = re.search(r"\b(?:голосую|vote)\s+(ЗА|ПРОТИВ|ВОЗДЕРЖАЛСЯ)\b", clean, re.I)
-        if m:
-            return _normalize(m.group(1)), clean
-
-        # Приоритет 4: первое ЗА/ПРОТИВ в тексте
-        m = re.search(r"\b(ПРОТИВ|REJECT|ЗА|ACCEPT|ВОЗДЕРЖ)\w*\b", clean, re.I)
-        if m:
-            return _normalize(m.group(1)), clean
-
-        # Последний фолбэк — ВОЗДЕРЖАЛСЯ (не ЗА, чтобы не пропускать дефицитные планы)
-        return "ВОЗДЕРЖАЛСЯ", clean
-
-    @staticmethod
-    def _find_lever(alias_token: str, levers_cfg: list[dict]):
-        if not alias_token:
-            return None
-        alias_clean = str(alias_token).strip().lower().replace("_", " ")
-        if alias_clean in {"me", "myself", "я", "мне", "себе", "взнос", "вклад", "доля", "деньги", "бюджет"}:
-            return None
-
-        for lev in levers_cfg:
-            lid = lev["id"].lower().replace("_", " ")
-            ltitle = lev["title"].lower()
-            aliases = [str(a).lower().replace("_", " ") for a in lev.get("aliases", [])]
-            if alias_clean == lid or alias_clean == ltitle or alias_clean in aliases:
-                return lev
-            if any(len(alias_clean) >= 4 and len(a) >= 4 and (a in alias_clean or alias_clean in a) for a in aliases):
-                return lev
-        return None
-
-    @staticmethod
-    def _normalize_lever_value(lev: dict | None, raw_val: Any) -> Any:
-        l_type = lev.get("type", "bool") if lev else "bool"
-        if l_type == "bool":
-            if isinstance(raw_val, bool):
-                return raw_val
-            s = str(raw_val).lower().strip()
-            return any(w in s for w in ["да", "yes", "true", "1", "вкл", "соглас", "подтвержд", "+"])
-        elif l_type == "int":
-            digits = re.search(r"\d+", str(raw_val))
-            val = int(digits.group(0)) if digits else (lev.get("default", 36) if lev else 36)
-            min_v = lev.get("min_value") if lev else None
-            max_v = lev.get("max_value") if lev else None
-            if min_v is not None:
-                val = max(min_v, val)
-            if max_v is not None:
-                val = min(max_v, val)
-            return val
-        elif l_type == "str":
-            if raw_val is None or str(raw_val).strip().lower() in {"none", "null", ""}:
-                return lev.get("default", "100%") if lev else "100%"
-            low = str(raw_val).lower().strip()
-            if any(w in low for w in ["shared", "обоюд", "паритет", "компромисс"]):
-                return "shared"
-            elif any(w in low for w in ["holding", "завод", "холдинг", "комбинат"]):
-                return "holding"
-            elif any(w in low for w in ["city", "город", "администр"]):
-                return "city"
-            elif any(w in low for w in ["70", "семьдесят"]):
-                return "70%"
-            elif any(w in low for w in ["100", "полн", "штатн", "стандарт", "обычн", "неприемлем", "отказ", "не соглас"]):
-                return "100%"
-            return str(raw_val).strip(" '\"")
-        return raw_val
-
-    @staticmethod
-    def _parse_single_set(line: str, speaker: str, state: dict, levers_config: list[dict], total_cost: float) -> dict | None:
-        """Распознает одно действие SET: финансовый взнос/требование или переключение/требование крутилки."""
-        clean_cmd = re.sub(r"[\"\'«»]", "", line).strip()
-        clean_cmd = re.sub(r"^(?:DEMAND|ТРЕБУЮ|SET)\s+", "SET ", clean_cmd, flags=re.I)
-
-        all_names = list(state.get("players", {}).keys())
-
-        # 1. Попытка разобрать как финансовый взнос/долю (приоритет над крутилками)
-        m_pledge = re.match(
-            r"^SET(?:\s+(.+?))?\s+(доля|взнос|вклад)\s+([-+]?[\d\s.,]+%?)(?:\s+(.*))?$",
-            clean_cmd,
-            re.I,
-        )
-        if m_pledge:
-            raw_player, field_raw, raw_val, tail_msg = m_pledge.groups()
-            raw_p_clean = (raw_player or "me").strip().lstrip("@").lower()
-
-            if raw_p_clean in {"me", "myself", "я", "мне", "себе"}:
-                player = speaker
-            else:
-                player = _resolve_player_name(raw_p_clean, all_names) or speaker
-
-            field = "share" if field_raw.lower() == "доля" else "contribution"
-            val_str = raw_val.replace("%", "").replace(",", ".").replace(" ", "")
-            try:
-                val = float(val_str)
-                if field == "contribution" and 0 < val <= 1000:
-                    val *= 1_000_000.0
-            except ValueError:
-                val = 0.0
-
-            if _is_owner(player, speaker) or player == speaker:
-                return {
-                    "type": "PLEDGE_SET",
-                    "player": speaker,
-                    "field": field,
-                    "value": val,
-                    "tail_msg": tail_msg or "",
-                }
-            else:
-                return {
-                    "type": "DEMAND_PLEDGE",
-                    "demand_type": "pledge",
-                    "from": speaker,
-                    "target": player,
-                    "field": field,
-                    "value": val,
-                    "tail_msg": tail_msg or "",
-                }
-
-        # 2. Попытка разобрать как крутилку (SET [@target] <param_alias> <value>)
-        m_lever = re.match(r"^SET\s+(?:@?([A-Za-zА-Яа-я0-9_\-]+)\s+)?([A-Za-zА-Яа-я0-9_\-]+)\s+(.+)$", clean_cmd, re.I)
-        if m_lever:
-            t1, t2, raw_val = m_lever.groups()
-            target_lever = None
-            target_override = None
-
-            if t1:
-                lev1 = TwoLLMContractGame._find_lever(t1, levers_config)
-                if lev1:
-                    target_lever = lev1
-                    raw_val = f"{t2} {raw_val}".strip()
-                else:
-                    lev2 = TwoLLMContractGame._find_lever(t2, levers_config)
-                    if lev2:
-                        target_lever = lev2
-                        target_override = _resolve_player_name(t1, all_names) or t1.lstrip("@")
-            else:
-                target_lever = TwoLLMContractGame._find_lever(t2, levers_config)
-
-            if target_lever:
-                owner = target_lever["owner"]
-                val = TwoLLMContractGame._normalize_lever_value(target_lever, raw_val)
-
-                if _is_owner(owner, speaker):
-                    return {
-                        "type": "LEVER_SET",
-                        "lever_id": target_lever["id"],
-                        "title": target_lever["title"],
-                        "value": val,
-                        "cost": target_lever.get("cost", 0.0) if (val is True or (isinstance(val, (int, float)) and val > 0)) else 0.0,
-                        "owner": owner,
-                        "player": speaker,
-                    }
-                else:
-                    final_target = target_override if (target_override and not _is_owner(target_override, speaker)) else owner
-                    return {
-                        "type": "DEMAND_SET",
-                        "demand_type": "lever",
-                        "from": speaker,
-                        "target": final_target,
-                        "lever_id": target_lever["id"],
-                        "title": target_lever["title"],
-                        "value": val,
-                        "raw_val": raw_val,
-                    }
-
-        return None
-
-    @staticmethod
-    def _build_parser_prompt(speaker: str, state: dict, levers_config: list[dict], total_cost: float, text: str) -> tuple[str, str]:
-        sp_data = state.get("players", {}).get(speaker, {})
-        cur_contrib = sp_data.get("contribution")
-        cur_contrib_str = _format_money(cur_contrib) if cur_contrib is not None else "не зафиксирован"
-
-        owned_levers = [lev for lev in levers_config if _is_owner(lev.get("owner", ""), speaker)]
-        owned_str = ", ".join(f"{l['title']} (ID: {l['id']})" for l in owned_levers) if owned_levers else "нет рычагов в прямом ведении"
-
-        sp_max_b = sp_data.get("max_budget", 0.0)
-        sp_budget_str = _format_money(sp_max_b)
-
-        all_players_str = ", ".join(state.get("players", {}).keys())
-
-        levers_doc = []
-        cur_levers = state.get("levers", {})
-        for l in levers_config:
-            aliases_str = f" [синонимы: {', '.join(l.get('aliases', []))}]" if l.get('aliases') else ""
-            c_val = cur_levers.get(l["id"], l.get("default"))
-            levers_doc.append(
-                f"- ID: '{l['id']}' | Название: '{l['title']}' | Владелец: @{l['owner']} | Тип: {l.get('type')}{aliases_str}\n"
-                f"  Описание: {l.get('description', '—')} | Текущее значение: {c_val}"
-            )
-        levers_doc_str = "\n".join(levers_doc)
-
-        tot_collected = sum(v["contribution"] for v in state.get("players", {}).values() if v.get("contribution") is not None)
-        tot_deficit = max(0.0, total_cost - tot_collected)
-
-        system_prompt = (
-            "Ты — профессиональный секретарь и независимый аналитик общественных слушаний.\n"
-            "Твоя задача — объективно проанализировать речь участника и извлечь из нее:\n"
-            "1. Собственный финансовый взнос участника (в миллионах рублей).\n"
-            "2. Переключение рычагов/условий, которыми управляет ЭТОТ участник.\n"
-            "3. Встречные требования и ультиматумы участника к ДРУГИМ сторонам (взносы или переключение их рычагов).\n"
-            "4. Кому адресовано обращение (если есть).\n"
-            "5. Очищенную живую речь участника для официальной стенограммы.\n\n"
-            "ПРАВИЛА ИЗВЛЕЧЕНИЯ:\n"
-            "• СОБСТВЕННЫЙ ВЗНОС (own_contribution):\n"
-            "  - Извлекай число (в млн ₽) ТОЛЬКО если спикер заявляет, подтверждает или меняет вклад СВОЕЙ стороны (например: 'вношу 50 млн' или 'SET me Взнос 50' -> 50.0).\n"
-            "  - Если спикер требует денег от ДРУГОЙ стороны (например: 'пусть холдинг внесет 120 млн') — это ТРЕБОВАНИЕ (demands), а НЕ собственный взнос!\n"
-            "  - Если свой взнос не назван и не изменен — укажи null.\n"
-            "  - РАЗРЕШЕНИЕ ПРОТИВОРЕЧИЙ: если в тексте спикер заявляет одну сумму ('увеличиваем взнос до 60 млн'), а в технической команде осталась старая цифра ('SET me Взнос 20') — приоритет имеет явно заявленное в речи спикера намерение (60.0).\n\n"
-            "• СВОИ РЫЧАГИ (own_levers):\n"
-            "  - Спикер имеет право напрямую менять ТОЛЬКО параметры, владельцем которых он является!\n"
-            "  - Формат: {<id_рычага>: <значение>}. Для bool: true/false. Для int: число (24/36/48). Для str: '100%'/'70%', 'shared'/'holding'/'city'.\n"
-            "  - Если спикер пытается изменить чужой параметр (например, жители пишут 'SET тарифы да') — это ТРЕБОВАНИЕ к владельцу, а не свой рычаг!\n\n"
-            "• ТРЕБОВАНИЯ И УЛЬТИМАТУМЫ (demands):\n"
-            "  - Извлеки ВСЕ требования и ультиматумы спикера к другим сторонам.\n"
-            "  - К каждому требованию укажи: 'target' (имя или роль стороны), 'demand_type' ('pledge' для взноса или 'lever' для рычага), 'lever_id' (если lever), 'value' (число млн для взноса или значение рычага), 'text' (краткое описание требования/ультиматума).\n\n"
-            "• ОТОЗВАННЫЕ ИЛИ СОГЛАСОВАННЫЕ ТРЕБОВАНИЯ (withdrawn_demands):\n"
-            "  - Если спикер соглашается на предложенные другой стороной условия, идет на компромисс или прямо снимает свои претензии (например: 'мы принимаем предложение завода', 'снимаем требование о 150 млн', 'согласны на предложенные сроки') — перечисли имена сторон или параметры в списке withdrawn_demands.\n"
-            "  - Если участник полностью принимает сделку (ACCEPT / СОГЛАСЕН СО ВСЕМ), укажи [\"all\"].\n\n"
-            "• АДРЕСАТ (addressed_to):\n"
-            "  - Имя стороны, к которой адресована реплика (или null, если обращение ко всем).\n\n"
-            "• ОЧИЩЕННАЯ РЕЧЬ (clean_speech):\n"
-            "  - Реплика спикера для публичного протокола без технических команд (SET, DEMAND, TO, SPEAK, JSON), системных тегов и скобок (key=val).\n"
-            "  - Если участник написал только технические команды без слов, сформулируй корректное официальное заявление от его лица (например: 'Подтверждаю фиксацию взноса 50 млн рублей.')."
-        )
-
-        human_prompt = (
-            f"ТЕКУЩИЙ СПИКЕР: @{speaker}\n"
-            f"Лимит бюджета спикера: {sp_budget_str}\n"
-            f"Рычаги в ведении спикера: {owned_str}\n"
-            f"Текущий зафиксированный взнос спикера: {cur_contrib_str}\n\n"
-            f"ВСЕ СТОРОНЫ: {all_players_str}\n\n"
-            f"ДОСТУПНЫЕ ПАРАМЕТРЫ ПРОЕКТА:\n{levers_doc_str}\n\n"
-            f"ФИНАНСЫ ПРОЕКТА: Цель: {_format_money(total_cost)} | Собрано: {_format_money(tot_collected)} | Дефицит: {_format_money(tot_deficit)}\n\n"
-            f"ВЫСТУПЛЕНИЕ УЧАСТНИКА:\n<speech>\n{text}\n</speech>\n\n"
-            "Верни СТРОГО валидный JSON следующей структуры без markdown-оберток:\n"
-            "{\n"
-            '  "own_contribution": <число_млн_или_null>,\n'
-            '  "own_levers": {"<id_рычага>": <значение>},\n'
-            '  "demands": [\n'
-            '    {\n'
-            '      "target": "<имя_или_роль_стороны>",\n'
-            '      "demand_type": "pledge" или "lever",\n'
-            '      "lever_id": "<id_рычага_или_null>",\n'
-            '      "value": <число_млн_или_значение_рычага>,\n'
-            '      "text": "<краткая суть требования/ультиматума>"\n'
-            '    }\n'
-            '  ],\n'
-            '  "withdrawn_demands": ["<имя_стороны_или_рычаг_или_all>"],\n'
-            '  "addressed_to": "<имя_стороны_или_null>",\n'
-            '  "clean_speech": "<очищенная прямая речь участника строго из блока <speech> для стенограммы, без технических команд и без служебных инструкций>"\n'
-            "}"
-        )
-
-        return system_prompt, human_prompt
-
-    def _parse_with_llm(
-        self,
-        command: str,
-        parser_llm,
-        speaker: str,
-        state: dict,
-        levers_config: list[dict],
-        total_cost: float,
-        phase_name: str = "Переговоры",
-        turn: int = 0,
-    ) -> dict:
-        """LLM-парсер: извлекает взносы, рычаги, требования/ультиматумы и очищенную речь."""
-        system_prompt, human_prompt = TwoLLMContractGame._build_parser_prompt(
-            speaker=speaker,
-            state=state,
-            levers_config=levers_config,
-            total_cost=total_cost,
-            text=command,
-        )
-
-        parser_current = {
-            "name": f"Парсер-секретарь (@{speaker})",
-            "llm": parser_llm,
-        }
-
-        try:
-            response = self._invoke_model(
-                parser_current,
-                phase=f"Парсер ({phase_name})",
-                turn=turn,
-                messages=[
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=human_prompt),
-                ],
-            )
-            raw_content = _extract_text(getattr(response, "content", response)).strip()
-
-            # Извлечение JSON
-            json_str = raw_content
-            if "```" in json_str:
-                m_fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", json_str, re.S)
-                if m_fence:
-                    json_str = m_fence.group(1)
-                else:
-                    m_braces = re.search(r"\{.*\}", json_str, re.S)
-                    if m_braces:
-                        json_str = m_braces.group(0)
-            else:
-                m_braces = re.search(r"\{.*\}", json_str, re.S)
-                if m_braces:
-                    json_str = m_braces.group(0)
-
-            data = json.loads(json_str)
-        except Exception:
-            return self._parse_fallback(command, speaker, state, levers_config, total_cost)
-
-        all_names = list(state.get("players", {}).keys())
-        actions = []
-
-        # 1. Собственный взнос
-        own_c = data.get("own_contribution")
-        if own_c is not None:
-            try:
-                own_val = float(own_c)
-                # Нормализация в рубли: если указано в миллионах (например <= 1000 при total_cost > 1000)
-                if 0 < own_val <= 1000 and total_cost > 1000:
-                    own_val = own_val * 1_000_000.0
-                if own_val >= 0:
-                    actions.append({
-                        "type": "PLEDGE_SET",
-                        "player": speaker,
-                        "field": "contribution",
-                        "value": own_val,
-                        "text": f"Взнос {speaker}: {_format_money(own_val)}",
-                    })
-            except (ValueError, TypeError):
-                pass
-
-        # 2. Собственные рычаги
-        own_levers = data.get("own_levers") or {}
-        if isinstance(own_levers, dict):
-            for l_id_raw, val_raw in own_levers.items():
-                lev = TwoLLMContractGame._find_lever(str(l_id_raw), levers_config)
-                if not lev:
-                    continue
-                owner = lev["owner"]
-                normalized_val = TwoLLMContractGame._normalize_lever_value(lev, val_raw)
-
-                if _is_owner(owner, speaker):
-                    actions.append({
-                        "type": "LEVER_SET",
-                        "lever_id": lev["id"],
-                        "title": lev["title"],
-                        "value": normalized_val,
-                        "cost": lev.get("cost", 0.0) if (normalized_val is True or (isinstance(normalized_val, (int, float)) and normalized_val > 0)) else 0.0,
-                        "owner": owner,
-                        "player": speaker,
-                    })
-                else:
-                    # Если попытался переключить чужой рычаг — превращаем в требование
-                    actions.append({
-                        "type": "DEMAND_SET",
-                        "demand_type": "lever",
-                        "from": speaker,
-                        "target": owner,
-                        "lever_id": lev["id"],
-                        "title": lev["title"],
-                        "value": normalized_val,
-                        "text": f"Требование к @{owner}: {lev['title']} -> {normalized_val}",
-                    })
-
-        # 3. Встречные требования и ультиматумы
-        demands = data.get("demands") or []
-        if isinstance(demands, list):
-            for d in demands:
-                if not isinstance(d, dict):
-                    continue
-                d_type = d.get("demand_type", "lever")
-                raw_target = d.get("target") or "все"
-                resolved_target = _resolve_player_name(raw_target, all_names) or str(raw_target).lstrip("@")
-                d_text = str(d.get("text") or "").strip()
-
-                if d_type == "pledge":
-                    try:
-                        p_val = float(d.get("value", 0.0))
-                        if 0 < p_val <= 1000 and total_cost > 1000:
-                            p_val = p_val * 1_000_000.0
-                        if resolved_target and not _is_owner(resolved_target, speaker):
-                            actions.append({
-                                "type": "DEMAND_PLEDGE",
-                                "demand_type": "pledge",
-                                "from": speaker,
-                                "target": resolved_target,
-                                "field": "contribution",
-                                "value": p_val,
-                                "text": d_text or f"Взнос {_format_money(p_val)}",
-                            })
-                    except (ValueError, TypeError):
-                        pass
-                else:
-                    l_id = d.get("lever_id") or ""
-                    lev = TwoLLMContractGame._find_lever(str(l_id), levers_config)
-                    if not lev and d_text:
-                        lev = TwoLLMContractGame._find_lever(d_text, levers_config)
-                    title = lev["title"] if lev else (l_id or d_text or "Параметр")
-                    val_norm = TwoLLMContractGame._normalize_lever_value(lev, d.get("value")) if lev else d.get("value")
-
-                    if lev and _is_owner(lev["owner"], speaker):
-                        actions.append({
-                            "type": "LEVER_SET",
-                            "lever_id": lev["id"],
-                            "title": lev["title"],
-                            "value": val_norm,
-                            "cost": lev.get("cost", 0.0) if (val_norm is True or (isinstance(val_norm, (int, float)) and val_norm > 0)) else 0.0,
-                            "owner": lev["owner"],
-                            "player": speaker,
-                        })
-                    else:
-                        target_to_use = resolved_target if (resolved_target and resolved_target != "все" and not _is_owner(resolved_target, speaker)) else (lev["owner"] if lev else "все")
-                        if not _is_owner(target_to_use, speaker):
-                            actions.append({
-                                "type": "DEMAND_SET",
-                                "demand_type": "lever",
-                                "from": speaker,
-                                "target": target_to_use,
-                                "lever_id": lev["id"] if lev else str(l_id),
-                                "title": title,
-                                "value": val_norm,
-                                "text": d_text or f"{title}: {val_norm}",
-                            })
-
-        # 4. Отозванные или согласованные требования
-        withdrawn = data.get("withdrawn_demands") or []
-        if isinstance(withdrawn, list):
-            for w in withdrawn:
-                if w:
-                    actions.append({
-                        "type": "DEMAND_WITHDRAW",
-                        "from": speaker,
-                        "target_or_lever": str(w),
-                    })
-
-        # 5. Адресат
-        addressed_raw = data.get("addressed_to")
-        resolved_addr = _resolve_player_name(addressed_raw, all_names) if addressed_raw else None
-
-        # 6. Очищенная речь
-        clean_speech = _clean_speech_message(data.get("clean_speech") or command)
-        if not clean_speech:
-            clean_speech = "Подтверждаю свою позицию и ранее заявленные условия участия."
-
-        return {
-            "valid": True,
-            "speaker": speaker,
-            "actions": actions,
-            "message": clean_speech,
-            "target": resolved_addr,
-            "raw_text": command,
-        }
-
-    @staticmethod
-    def _parse_fallback(command: str, speaker: str, state: dict, levers_config: list[dict], total_cost: float) -> dict:
-        """Надежный фолбэк-парсер без LLM на случай сбоя модели-парсера."""
-        text = command.strip()
-        lines = [re.sub(r"^[\s*+\-]+", "", l).strip() for l in text.splitlines() if l.strip()]
-        if not lines:
-            return {"valid": False, "speaker": speaker, "actions": [], "message": "", "target": None, "raw_text": text}
-
-        set_lines = []
-        speak_parts = []
-        addressed_target = None
-        all_names = list(state.get("players", {}).keys())
-
-        for line in lines:
-            upper = line.upper()
-            if upper.startswith("SPEAK ") or upper.startswith("СКАЗАТЬ "):
-                content = re.sub(r"^(?:SPEAK|СКАЗАТЬ)\s*[:\-\—]?\s*", "", line, flags=re.I).strip()
-                if content:
-                    speak_parts.append(content)
-                continue
-            if upper.startswith("TO ") or upper.startswith("ПЕРЕДАТЬ "):
-                t_str = re.sub(r"^(?:TO|ПЕРЕДАТЬ)\s*[:\-\—]?\s*", "", line, flags=re.I).strip()
-                addressed_target = _resolve_player_name(t_str, all_names)
-                continue
-
-            set_matches = list(re.finditer(
-                r"(?:^|(?<=\s)|(?<=\())(?:SET|DEMAND|ТРЕБУЮ)\s+[A-Za-zА-Яа-яёЁ0-9_@][^\n]*",
-                line, re.I
-            ))
-            if set_matches:
-                for m in set_matches:
-                    set_lines.append(m.group(0).strip().rstrip(")"))
-                remainder = line
-                for m in reversed(set_matches):
-                    remainder = remainder[:m.start()] + remainder[m.end():]
-                remainder = re.sub(r"[\(\)]", " ", remainder).strip()
-                remainder = re.sub(r"\s{2,}", " ", remainder).strip()
-                if remainder and len(remainder) > 3:
-                    speak_parts.append(remainder)
-            elif upper.startswith("SET ") or upper.startswith("DEMAND ") or upper.startswith("ТРЕБУЮ "):
-                set_lines.append(line)
-            else:
-                speak_parts.append(line)
-
-        actions = []
-        for s_line in set_lines:
-            act = TwoLLMContractGame._parse_single_set(s_line, speaker, state, levers_config, total_cost)
-            if act:
-                actions.append(act)
-
-        final_msg = _clean_speech_message(" ".join(speak_parts) if speak_parts else text)
-        return {
-            "valid": True,
-            "speaker": speaker,
-            "actions": actions,
-            "message": final_msg,
-            "target": addressed_target,
-            "raw_text": text,
-        }
-
-    def _parse(
-        self,
-        command: str,
-        speaker: str,
-        state: dict,
-        levers_config: list[dict],
-        total_cost: float,
-        llm=None,
-        phase_name: str = "Переговоры",
-        turn: int = 0,
-    ) -> dict:
-        parser_llm = getattr(self, "converter_model", None) or llm
-        if parser_llm:
-            try:
-                return self._parse_with_llm(
-                    command=command,
-                    parser_llm=parser_llm,
-                    speaker=speaker,
-                    state=state,
-                    levers_config=levers_config,
-                    total_cost=total_cost,
-                    phase_name=phase_name,
-                    turn=turn,
-                )
-            except Exception:
-                return self._parse_fallback(command, speaker, state, levers_config, total_cost)
-        return self._parse_fallback(command, speaker, state, levers_config, total_cost)
-
-    @staticmethod
-    def _sync_demands_status(state: dict, levers_config: list[dict] | None, total_cost: float) -> None:
-        """Динамически сверяет все требования с текущим состоянием игры и обновляет их статусы."""
-        demands = state.get("demands", [])
-        if not demands:
-            return
-
-        all_names = list(state.get("players", {}).keys())
-        current_levers = state.get("levers", {})
-
-        for d in demands:
-            if d.get("withdrawn"):
-                d["status"] = "agreed"
-                continue
-
-            d_type = d.get("demand_type")
-            target_raw = d.get("target", "")
-
-            if d_type == "pledge":
-                target_p = _resolve_player_name(target_raw, all_names) or target_raw
-                target_state = state.get("players", {}).get(target_p, {})
-                target_contrib = target_state.get("contribution") or 0.0
-                req_val = float(d.get("value") or 0.0)
-
-                # Нормализация рублей к млн если масштаб отличается
-                if 0 < req_val <= 1000 and total_cost > 1000:
-                    req_val *= 1_000_000.0
-
-                if req_val > 0 and target_contrib >= req_val:
-                    d["status"] = "agreed"
-                else:
-                    d["status"] = "pending"
-
-            elif d_type == "lever":
-                l_id = d.get("lever_id")
-                lev = None
-                if levers_config:
-                    lev = TwoLLMContractGame._find_lever(str(l_id), levers_config)
-                    if not lev:
-                        lev = TwoLLMContractGame._find_lever(str(d.get("title", "")), levers_config)
-
-                if lev:
-                    lid = lev["id"]
-                    curr_val = current_levers.get(lid, lev.get("default"))
-                    req_val = d.get("value")
-                    norm_req = TwoLLMContractGame._normalize_lever_value(lev, req_val)
-
-                    if lev.get("type") == "bool":
-                        if norm_req is True:
-                            d["status"] = "agreed" if curr_val is True else "pending"
-                        elif norm_req is False:
-                            d["status"] = "agreed" if curr_val is False else "pending"
-                        else:
-                            d["status"] = "agreed" if bool(curr_val) == bool(norm_req) else "pending"
-                    elif lev.get("type") == "int":
-                        try:
-                            c_int = int(curr_val)
-                            r_int = int(norm_req)
-                            d["status"] = "agreed" if c_int <= r_int else "pending"
-                        except (ValueError, TypeError):
-                            d["status"] = "agreed" if str(curr_val) == str(norm_req) else "pending"
-                    else:
-                        d["status"] = "agreed" if str(curr_val).strip().lower() == str(norm_req).strip().lower() else "pending"
-                else:
-                    # Фолбэк без levers_config: прямое сравнение по ключу l_id
-                    curr_val = current_levers.get(l_id)
-                    d["status"] = "agreed" if curr_val is not None and curr_val == d.get("value") else "pending"
-
-    @staticmethod
-    def _validate_and_sanitize_actions(
-        actions: list[dict],
-        speaker: str,
-        state: dict,
-        levers_config: list[dict],
-        total_cost: float,
-    ) -> list[dict]:
-        """
-        Алгоритмический валидатор действий:
-        1. Проверка бюджетов: игрок не может внести больше своего максимального бюджета.
-        2. Финансовые требования к другим сторонам не могут превышать бюджет целевой стороны (если у нее 0, требование отбрасывается).
-        3. Полномочия по рычагам: игрок может устанавливать (LEVER_SET) только свои рычаги.
-        4. Чужие рычаги автоматически конвертируются в требования (DEMAND_SET) строго к владельцу рычага.
-        5. Требования к самому себе отбрасываются или конвертируются в прямое действие.
-        6. Значения рычагов строго валидируются и нормализуются по типу и допустимым значениям (исключая None/'None').
-        """
-        all_names = list(state.get("players", {}).keys())
-        clean_actions = []
-
-        for act in actions:
-            act_type = act.get("type")
-
-            # 1. ВЗНОС СТОРОНЫ
-            if act_type == "PLEDGE_SET":
-                raw_player = act.get("player") or speaker
-                resolved_p = _resolve_player_name(raw_player, all_names) or speaker
-                p_state = state.get("players", {}).get(resolved_p, {})
-                max_b = p_state.get("max_budget")
-
-                try:
-                    val = float(act.get("value", 0.0))
-                except (ValueError, TypeError):
-                    continue
-
-                if 0 < val <= 1000 and total_cost > 1000:
-                    val *= 1_000_000.0
-
-                # Сторона с нулевым бюджетом не может делать взносы
-                if max_b is not None and max_b <= 0:
-                    continue
-
-                # Если взнос превышает бюджет стороны (например, Администрация цитирует 160 млн холдинга):
-                if max_b is not None and val > max_b:
-                    if val > max_b * 1.1:
-                        # Очевидная ссылка на чужой взнос -> отбрасываем
-                        continue
-                    else:
-                        val = max_b
-
-                if val < 0:
-                    continue
-
-                clean_actions.append({
-                    "type": "PLEDGE_SET",
-                    "player": resolved_p,
-                    "field": act.get("field", "contribution"),
-                    "value": val,
-                    "text": act.get("text", f"Взнос {resolved_p}: {_format_money(val)}"),
-                })
-
-            # 2. ТРЕБОВАНИЕ ВЗНОСА К ДРУГОЙ СТОРОНЕ
-            elif act_type == "DEMAND_PLEDGE":
-                from_p = act.get("from") or speaker
-                raw_target = str(act.get("target") or "все").lstrip("@").strip()
-                resolved_t = _resolve_player_name(raw_target, all_names) or raw_target
-
-                if _is_owner(resolved_t, from_p):
-                    continue
-
-                try:
-                    val = float(act.get("value", 0.0))
-                except (ValueError, TypeError):
-                    continue
-
-                if 0 < val <= 1000 and total_cost > 1000:
-                    val *= 1_000_000.0
-
-                target_state = state.get("players", {}).get(resolved_t, {})
-                target_max_b = target_state.get("max_budget")
-
-                # Нельзя требовать деньги от стороны с 0 бюджетом (например, от Эко-НКО или Жителей)
-                if target_max_b is not None and target_max_b <= 0:
-                    continue
-
-                # Ограничиваем требование максимальной вместимостью бюджета целевой стороны
-                if target_max_b is not None and val > target_max_b:
-                    val = target_max_b
-
-                if val <= 0:
-                    continue
-
-                clean_actions.append({
-                    "type": "DEMAND_PLEDGE",
-                    "demand_type": "pledge",
-                    "from": from_p,
-                    "target": resolved_t,
-                    "field": "contribution",
-                    "value": val,
-                    "text": f"Взнос {_format_money(val)}",
-                })
-
-            # 3. ПЕРЕКЛЮЧЕНИЕ РЫЧАГА
-            elif act_type == "LEVER_SET":
-                l_id = act.get("lever_id")
-                lev = TwoLLMContractGame._find_lever(str(l_id), levers_config)
-                if not lev:
-                    continue
-
-                norm_val = TwoLLMContractGame._normalize_lever_value(lev, act.get("value"))
-                if norm_val is None or str(norm_val).strip().lower() in {"none", "null", ""}:
-                    norm_val = lev.get("default")
-
-                if _is_owner(lev["owner"], speaker):
-                    cost = lev.get("cost", 0.0) if (norm_val is True or (isinstance(norm_val, (int, float)) and norm_val > 0)) else 0.0
-                    clean_actions.append({
-                        "type": "LEVER_SET",
-                        "lever_id": lev["id"],
-                        "title": lev["title"],
-                        "value": norm_val,
-                        "cost": cost,
-                        "owner": lev["owner"],
-                        "player": speaker,
-                    })
-                else:
-                    clean_actions.append({
-                        "type": "DEMAND_SET",
-                        "demand_type": "lever",
-                        "from": speaker,
-                        "target": lev["owner"],
-                        "lever_id": lev["id"],
-                        "title": lev["title"],
-                        "value": norm_val,
-                        "text": f"{lev['title']}: {norm_val}",
-                    })
-
-            # 4. ТРЕБОВАНИЕ ПО РЫЧАГУ
-            elif act_type == "DEMAND_SET":
-                from_p = act.get("from") or speaker
-                l_id = act.get("lever_id") or act.get("title")
-                lev = TwoLLMContractGame._find_lever(str(l_id), levers_config)
-                if not lev:
-                    continue
-
-                norm_val = TwoLLMContractGame._normalize_lever_value(lev, act.get("value"))
-                if norm_val is None or str(norm_val).strip().lower() in {"none", "null", ""}:
-                    norm_val = lev.get("default")
-
-                if _is_owner(lev["owner"], from_p):
-                    cost = lev.get("cost", 0.0) if (norm_val is True or (isinstance(norm_val, (int, float)) and norm_val > 0)) else 0.0
-                    clean_actions.append({
-                        "type": "LEVER_SET",
-                        "lever_id": lev["id"],
-                        "title": lev["title"],
-                        "value": norm_val,
-                        "cost": cost,
-                        "owner": lev["owner"],
-                        "player": from_p,
-                    })
-                else:
-                    clean_actions.append({
-                        "type": "DEMAND_SET",
-                        "demand_type": "lever",
-                        "from": from_p,
-                        "target": lev["owner"],
-                        "lever_id": lev["id"],
-                        "title": lev["title"],
-                        "value": norm_val,
-                        "text": f"{lev['title']} ({norm_val})",
-                    })
-
-            elif act_type == "DEMAND_WITHDRAW":
-                clean_actions.append(act)
-
-        return clean_actions
-
-    @staticmethod
-    def _apply_actions(state: dict, parsed: dict, target: str | None, total_cost: float, levers_config: list[dict] | None = None) -> dict:
-        """Применяет накопленные действия (деньги, крутилки, требования) к состоянию игры."""
-        applied_log = []
-        speaker = parsed.get("speaker") or list(state.get("players", {}).keys())[0]
-        all_names = list(state.get("players", {}).keys())
-        cfg = levers_config or []
-
-        # Алгоритмическая валидация и нормализация всех действий
-        validated_actions = TwoLLMContractGame._validate_and_sanitize_actions(
-            actions=parsed.get("actions", []),
-            speaker=speaker,
-            state=state,
-            levers_config=cfg,
-            total_cost=total_cost,
-        )
-
-        for act in validated_actions:
-            act_type = act.get("type")
-
-            if act_type == "PLEDGE_SET":
-                p_name = act.get("player") or target or speaker or "me"
-                resolved_p = _resolve_player_name(p_name, all_names) or p_name
-                if resolved_p not in state["players"]:
-                    resolved_p = list(state["players"].keys())[0]
-
-                field = act.get("field", "contribution")
-                val = float(act.get("value", 0.0))
-                p_state = state["players"].setdefault(resolved_p, {"contribution": None, "share": None, "spent_on_levers": 0.0})
-
-                if field == "contribution":
-                    if 0 < val <= 1000 and total_cost > 1000:
-                        val *= 1_000_000.0
-                    p_state["contribution"] = val
-                    p_state["share"] = round((val / total_cost) * 100, 2) if total_cost > 0 else 0.0
-                else:
-                    p_state["share"] = val
-                    p_state["contribution"] = round((val / 100.0) * total_cost, 2)
-
-                applied_log.append({
-                    "kind": "PLEDGE",
-                    "player": resolved_p,
-                    "field": field,
-                    "value": val,
-                    "contribution": p_state["contribution"],
-                    "share": p_state["share"],
-                })
-
-            elif act_type == "LEVER_SET":
-                l_id = act.get("lever_id")
-                if not l_id:
-                    continue
-                val = act.get("value")
-                cost = float(act.get("cost", 0.0))
-                owner = act.get("owner", "")
-                title = act.get("title", l_id)
-                player = act.get("player") or speaker
-                resolved_p = _resolve_player_name(player, all_names) or player
-                if resolved_p not in state["players"]:
-                    resolved_p = list(state["players"].keys())[0]
-
-                state["levers"][l_id] = val
-                if cost > 0 and resolved_p in state["players"]:
-                    state["players"][resolved_p]["spent_on_levers"] = cost
-                elif val is False and l_id in state["levers"] and resolved_p in state["players"]:
-                    state["players"][resolved_p]["spent_on_levers"] = 0.0
-
-                applied_log.append({
-                    "kind": "LEVER",
-                    "lever_id": l_id,
-                    "title": title,
-                    "value": val,
-                    "cost": cost,
-                    "owner": owner,
-                })
-
-            elif act_type == "DEMAND_SET":
-                from_p = act.get("from", speaker)
-                target_p = act.get("target", "")
-                l_id = act.get("lever_id")
-                title = act.get("title", l_id)
-                val = act.get("value")
-
-                if _is_owner(target_p, from_p):
-                    lev = TwoLLMContractGame._find_lever(l_id or title, levers_config)
-                    if lev and _is_owner(lev["owner"], from_p):
-                        cost = lev.get("cost", 0.0) if (val is True or (isinstance(val, (int, float)) and val > 0)) else 0.0
-                        state.setdefault("levers", {})[lev["id"]] = {
-                            "value": val,
-                            "owner": lev["owner"],
-                            "cost": cost,
-                            "title": lev["title"],
-                            "set_by": from_p,
-                        }
-                        applied_log.append({
-                            "kind": "LEVER",
-                            "lever_id": lev["id"],
-                            "title": lev["title"],
-                            "value": val,
-                            "cost": cost,
-                            "owner": lev["owner"],
-                        })
-                        continue
-                    elif lev:
-                        target_p = lev["owner"]
-                    else:
-                        continue
-                if _is_owner(target_p, from_p):
-                    continue
-
-                demands = state.setdefault("demands", [])
-                existing = next(
-                    (d for d in demands if d.get("demand_type") == "lever"
-                     and _is_owner(d.get("from", ""), from_p)
-                     and (d.get("lever_id") == l_id or (title and d.get("title") == title))),
-                    None
-                )
-                if existing:
-                    existing["value"] = val
-                    existing["target"] = target_p
-                    existing["title"] = title
-                    existing["text"] = act.get("text", existing.get("text"))
-                else:
-                    demands.append({
-                        "demand_type": "lever",
-                        "from": from_p,
-                        "target": target_p,
-                        "lever_id": l_id,
-                        "title": title,
-                        "value": val,
-                        "status": "pending",
-                        "text": act.get("text", f"{title}: {val}"),
-                    })
-
-                applied_log.append({
-                    "kind": "DEMAND",
-                    "demand_type": "lever",
-                    "from": from_p,
-                    "target": target_p,
-                    "lever_id": l_id,
-                    "title": title,
-                    "value": val,
-                })
-
-            elif act_type == "DEMAND_PLEDGE":
-                from_p = act.get("from", speaker)
-                target_p = act.get("target", "")
-                if _is_owner(target_p, from_p):
-                    continue
-                field = act.get("field", "contribution")
-                val = float(act.get("value", 0.0))
-                if 0 < val <= 1000 and total_cost > 1000:
-                    val *= 1_000_000.0
-
-                demands = state.setdefault("demands", [])
-                existing = next(
-                    (d for d in demands if d.get("demand_type") == "pledge"
-                     and _is_owner(d.get("from", ""), from_p)
-                     and _is_owner(d.get("target", ""), target_p)),
-                    None
-                )
-                if existing:
-                    existing["value"] = val
-                    existing["field"] = field
-                    existing["text"] = act.get("text", f"Взнос {_format_money(val)}")
-                else:
-                    demands.append({
-                        "demand_type": "pledge",
-                        "from": from_p,
-                        "target": target_p,
-                        "field": field,
-                        "value": val,
-                        "status": "pending",
-                        "text": act.get("text", f"Взнос {_format_money(val)}"),
-                    })
-
-                applied_log.append({
-                    "kind": "DEMAND",
-                    "demand_type": "pledge",
-                    "from": from_p,
-                    "target": target_p,
-                    "field": field,
-                    "value": val,
-                })
-
-            elif act_type == "DEMAND_WITHDRAW":
-                from_p = act.get("from", speaker)
-                target_or_lever = str(act.get("target_or_lever", "")).strip().lower()
-                demands = state.setdefault("demands", [])
-                for d in demands:
-                    if _is_owner(d.get("from", ""), from_p):
-                        if (target_or_lever in {"all", "все", "всё"}
-                            or target_or_lever in str(d.get("target", "")).lower()
-                            or target_or_lever in str(d.get("lever_id", "")).lower()
-                            or target_or_lever in str(d.get("title", "")).lower()):
-                            d["status"] = "agreed"
-                            d["withdrawn"] = True
-                            applied_log.append({
-                                "kind": "DEMAND_WITHDRAWN",
-                                "from": from_p,
-                                "demand": d.get("title") or d.get("text"),
-                            })
-
-            elif act_type == "LEVER_REJECTED":
-                applied_log.append({
-                    "kind": "REJECTED",
-                    "reason": act.get("reason", "Действие отклонено"),
-                })
-
-        # Синхронизация статусов всех требований с текущим состоянием
-        TwoLLMContractGame._sync_demands_status(state, levers_config, total_cost)
-
-        return {
-            "type": "ACTION",
-            "applied": applied_log,
-            "message": parsed.get("message", ""),
-            "target": target,
-        }
     # RAG, Контекст
 
     def _rag_context(self, speaker, profile, history, phase, retrieve=True) -> str:
@@ -1608,7 +746,6 @@ class TwoLLMContractGame(Component):
         lines = ["В ВАШЕМ ВЕДЕНИИ НАХОДЯТСЯ СЛЕДУЮЩИЕ ПАРАМЕТРЫ ПРОЕКТА:"]
         for lev in owned:
             curr_val = current_levers.get(lev["id"], lev.get("default"))
-            alias_example = lev["aliases"][0] if lev.get("aliases") else lev["id"]
             cost_info = (
                 f"Стоимость включения: {_format_money(lev['cost'])} (списывается из вашего резерва, не поступает в общий фонд очистных)."
                 if lev.get("cost")
@@ -1617,10 +754,11 @@ class TwoLLMContractGame(Component):
             lines.append(f"• [{lev['title']}]")
             lines.append(f"  - Текущее состояние: {curr_val}")
             lines.append(f"  - Экономика действия: {cost_info}")
-            if lev["type"] == "bool":
-                lines.append(f"  - Команда переключения: SET {alias_example} да  или  SET {alias_example} нет")
-            else:
-                lines.append(f"  - Команда изменения: SET {alias_example} <число>")
+            lines.append(f"  - ID для own_levers: {lev['id']}; тип: {lev['type']}")
+            if "allowed" in lev:
+                lines.append(f"  - Допустимые значения: {lev['allowed']}")
+            if "min_value" in lev or "max_value" in lev:
+                lines.append(f"  - Диапазон: {lev.get('min_value')} — {lev.get('max_value')}")
             lines.append("  - Решение об изменении и условиях вы принимаете самостоятельно на основе своей стратегии.")
         return "\n".join(lines)
 
@@ -1660,7 +798,7 @@ class TwoLLMContractGame(Component):
             f"│ СТАТУС БЮДЖЕТА:             {deficit_status:<35} │",
             "└─────────────────────────────────────────────────────────────────┘",
             "⚡ ПРАВИЛА КАЛЬКУЛЯТОРА ДЛЯ ВСЕХ УЧАСТНИКОВ:",
-            "1. Юридическую силу имеют ТОЛЬКО взносы из таблицы выше. Если игрок сказал в речи 'я выделяю 300 млн', но не написал команду 'SET me Взнос 300', в калькуляторе его взнос НЕ меняется!",
+            "1. Юридическую силу имеют ТОЛЬКО взносы из таблицы выше. Речь не меняет обязательства: новый взнос задаётся полем own_contribution_millions.",
             f"2. НЕ СЧИТАЙ В УМЕ! Реальный дефицит проекта прямо сейчас равен РОВНО {_format_money(deficit)}.",
             "3. Категорически запрещено заявлять о закрытии дефицита или выходе на целевой бюджет, пока в строке СТАТУС БЮДЖЕТА не появится '100% ЗАКРЫТ'.",
         ])
@@ -1690,7 +828,7 @@ class TwoLLMContractGame(Component):
         if demands:
             lines.append("\n⚡ АКТИВНЫЕ ТРЕБОВАНИЯ И ВСТРЕЧНЫЕ УСЛОВИЯ СТОРОН:")
             for d in demands:
-                status_icon = "✅ СОГЛАСОВАНО" if d.get("status") == "agreed" else "⏳ НА РАССМОТРЕНИИ"
+                status_icon = {"agreed": "✅ СОГЛАСОВАНО", "withdrawn": "ОТОЗВАНО"}.get(d.get("status"), "⏳ НА РАССМОТРЕНИИ")
                 if d.get("demand_type") == "pledge":
                     lines.append(f"  • [{status_icon}] От @{d['from']} к @{d['target']}: Взнос {_format_money(d['value'])}")
                 else:
@@ -1801,7 +939,7 @@ class TwoLLMContractGame(Component):
         if my_demands:
             lines.append("5. Статус твоих встречных требований к другим сторонам:")
             for d in my_demands:
-                st_str = "СОГЛАСОВАНО ✅" if d.get("status") == "agreed" else "НЕ СОГЛАСОВАНО ⏳"
+                st_str = {"agreed": "СОГЛАСОВАНО ✅", "withdrawn": "ОТОЗВАНО"}.get(d.get("status"), "НЕ СОГЛАСОВАНО ⏳")
                 if d.get("demand_type") == "pledge":
                     lines.append(f"   - Взнос @{d['target']} ({_format_money(d['value'])}): {st_str}")
                 else:
@@ -1853,6 +991,8 @@ class TwoLLMContractGame(Component):
                     blocks.append(f"[{t_num}] {speaker}{target_str}:{detail_str}")
             elif act_type == "VOTE":
                 blocks.append(f"[{t_num}] {speaker}: VOTE {action.get('vote')} — «{action.get('comment', '')}»")
+            elif act_type == "SKIPPED":
+                blocks.append(f"[{t_num}] {speaker}: ход пропущен (invalid_response)")
             else:
                 blocks.append(f"[{t_num}] {speaker}: {item.get('command')}")
         return "\n".join(blocks)
@@ -1943,7 +1083,7 @@ class TwoLLMContractGame(Component):
                 t = h["turn"]
                 sp = h["speaker"]
                 act = h.get("action", {})
-                vote = act.get("vote", "ЗА")
+                vote = act.get("vote") or "ГОЛОС НЕ ПОЛУЧЕН"
                 comment = act.get("comment", "")
                 icon = "🟢" if vote == "ЗА" else ("🔴" if vote == "ПРОТИВ" else "⚪")
                 lines.append(f"* **[{t}] {sp}:** {icon} **VOTE {vote}:** «{comment}»\n")
@@ -2051,10 +1191,7 @@ class TwoLLMContractGame(Component):
             f"{rules_block}\n\n"
             f"ИНСТРУКЦИЯ К ЭТАПУ 1:\n"
             f"Озвучь стартовую позицию своей стороны. Укажи базовый планируемый взнос и ключевые требования.\n"
-            f"Ты можешь выражать свои условия естественной речью или использовать краткие команды:\n"
-            f"- Свой взнос: укажи сумму в речи (например: 'вносим 50 млн руб.') или напиши 'SET me Взнос 50'.\n"
-            f"- Свои условия и параметры: укажи в тексте или напиши 'SET <рычаг> <значение>' (например: SET датчики да, SET срок 36).\n"
-            f"- Встречные требования к другим сторонам: четко озвучь их в речи или укажи 'SET @<сторона> Взнос <число>'."
+            f"Заполни speech и структурированные поля собственного взноса, условий и требований."
         )
 
     @staticmethod
@@ -2074,27 +1211,27 @@ class TwoLLMContractGame(Component):
             banner += " | ✅ БЮДЖЕТ 100% СОБРАН"
             budget_guidance = (
                 f"✅ БЮДЖЕТ ПОЛНОСТЬЮ СОБРАН ({_format_money(total_cost)})! "
-                "Если все обязательства согласованы, стороны могут переходить к подтверждению сделки (ACCEPT)."
+                "Если все обязательства согласованы, стороны могут переходить к голосованию."
             )
 
         # Проверка встречных требований к текущему оратору
         incoming_demands = [
             d for d in state.get("demands", [])
-            if _is_owner(d.get("target", ""), speaker) and d.get("status") != "agreed"
+            if d.get("target") == speaker and d.get("status") == "pending"
         ]
         demands_alert = ""
         if incoming_demands:
             alert_items = []
             for d in incoming_demands:
                 if d.get("demand_type") == "pledge":
-                    alert_items.append(f"- @{d['from']} требует от тебя взнос {_format_money(d['value'] * 1_000_000.0 if d['value'] < 1000 else d['value'])}")
+                    alert_items.append(f"- @{d['from']} требует от тебя взнос {_format_money(d['value'])}")
                 else:
                     v_str = "включить" if d.get("value") is True else ("выключить" if d.get("value") is False else str(d.get("value")))
                     alert_items.append(f"- @{d['from']} требует {v_str} условие '{d.get('title')}'")
             demands_alert = (
                 "\n⚡ ВНИМАНИЕ! К ТЕБЕ ВЫДВИНУТЫ ВСТРЕЧНЫЕ ТРЕБОВАНИЯ ДРУГИХ СТОРОН:\n"
                 + "\n".join(alert_items) + "\n"
-                + "Отреагируй на них: если согласен — подтверди согласие в речи или командой SET. Если не согласен — аргументируй отказ.\n"
+                + "Отреагируй на них: если согласен — заполни responses и соответствующие собственные обязательства. Если не согласен — аргументируй отказ.\n"
             )
 
         # Анти-повторение: проверяем, говорил ли игрок ранее
@@ -2109,7 +1246,7 @@ class TwoLLMContractGame(Component):
                 "\n⚡ ПРАВИЛА ВЕДЕНИЯ ПЕРЕГОВОРОВ И АНТИ-ПОВТОРЕНИЕ:\n"
                 "- Категорически запрещено повторять свою вступительную речь или прошлые реплики слово в слово!\n"
                 "- Развивай диалог: отвечай на реплику собеседника, торгуйся, двигайся навстречу или жестко возражай.\n"
-                "- Не вставляй служебные теги в текст речи (не пиши '[SET me ...]' внутри предложений, говори живо).\n"
+                "- В speech пиши только публичную речь; действия задавай структурированными полями.\n"
             )
 
         rules_block = f"\n\nРЕГЛАМЕНТ ЗАСЕДАНИЯ:\n{rules_prompt.strip()}" if rules_prompt else ""
@@ -2130,12 +1267,9 @@ class TwoLLMContractGame(Component):
             f"ИНСТРУКЦИЯ К ЭТАПУ 2:\n"
             f"Веди торг, отстаивай интересы своей стороны, предлагай компромиссы или выдвигай требования и ультиматумы.\n"
             f"ФОКУС НА СТОЛЕ ПЕРЕГОВОРОВ: договаривайся СТРОГО вокруг параметров таблицы выше (взносы сторон, тарифы ЖКХ, эко-датчики 24/7, сроки, мощность завода, налоговые льготы, мораторий на протесты, питьевая вода). Не выдумывай несуществующие внешние структуры (советы, фонды, центры), которых нет на столе переговоров.\n"
-            f"Секретарь слушаний зафиксирует все твои слова, взносы и встречные условия в протоколе.\n"
-            f"Ты можешь говорить в свободной форме или использовать удобные пометки:\n"
-            f"- Свой взнос: прямо в речи ('увеличиваем наш вклад до 120 млн') или 'SET me Взнос <число_в_млн>'.\n"
-            f"- Свои рычаги: прямо в речи ('согласны предоставить налоговые льготы') или 'SET <параметр> <значение>'.\n"
-            f"- Требования и ультиматумы: четко назови сторону и условие (например: 'Требуем от холдинга 130 млн и 70% мощности').\n"
-            f"- Обращение к партнеру: обратись по имени в речи или укажи 'TO @Имя_Игрока'."
+            f"Публичная речь и структурированные обязательства будут записаны в протокол.\n"
+            f"Речь запиши в speech. Изменения обязательств и ответы на требования задай "
+            f"структурированными полями. Для адресата используй player_id в addressed_to."
         )
 
     @staticmethod
@@ -2157,7 +1291,7 @@ class TwoLLMContractGame(Component):
             f"ИНСТРУКЦИЯ К LAST CALL:\n"
             f"Это твоё последнее слово перед составлением проекта соглашения и голосованием.\n"
             f"Озвучь финальное решение по сумме взноса и условиям участия.\n"
-            f"Если ты готов увеличить вклад или изменить условия — заяви об этом прямо сейчас (словами или через SET).\n"
+            f"Если ты готов увеличить вклад или изменить условия — заполни соответствующие поля собственного взноса и условий.\n"
             f"Если бюджет закрыть не удается — объясни свою принципиальную позицию."
         )
 
@@ -2175,11 +1309,8 @@ class TwoLLMContractGame(Component):
             f"ИНСТРУКЦИЯ ПО ГОЛОСОВАНИЮ:\n"
             f"Оцени итоговый Проект Соглашения выше строго с позиций целей, затрат и красных линий своей стороны.\n"
             f"Прими ответственное решение: если ключевые гарантии для твоей роли согласованы и дефицит допустим в рамках компромисса — ты вправе голосовать ЗА или ВОЗДЕРЖАЛСЯ. Если же нарушены твои критические красные линии — голосуй ПРОТИВ.\n"
-            f"Твой ответ ОБЯЗАН начинаться с одной из строк (и только одной!):\n"
-            f"РЕШЕНИЕ: ЗА\n"
-            f"РЕШЕНИЕ: ПРОТИВ\n"
-            f"РЕШЕНИЕ: ВОЗДЕРЖАЛСЯ\n"
-            f"После строки РЕШЕНИЕ: — только обоснование. Нельзя писать оба варианта.\n"
+            f"Верни vote: for — за, against — против, abstain — воздержался. "
+            f"Обоснование запиши в speech. Изменять протокол на голосовании нельзя.\n"
             f"Соглашение будет принято, если наберет не менее {majority_threshold} из {total_voters} голосов."
         )
     def _init_session(self) -> tuple[list[dict], list[str], dict, dict]:
@@ -2220,6 +1351,12 @@ class TwoLLMContractGame(Component):
                 "profile": profile,
             })
 
+        names_by_id = {}
+        for player in players:
+            player_id = player["profile"].get("id")
+            if not isinstance(player_id, str) or not player_id or player_id in names_by_id:
+                raise ValueError("У каждого игрока должен быть уникальный непустой id")
+            names_by_id[player_id] = player["name"]
         names = [p["name"] for p in players]
         if len(names) != len(set(names)):
             raise ValueError("Имена игроков должны быть уникальными.")
@@ -2244,6 +1381,8 @@ class TwoLLMContractGame(Component):
         levers_config = settings_data["levers"]
 
         state = {
+            "player_ids": names_by_id,
+            "next_demand_id": 1,
             "total_cost": total_cost,
             "players": {
                 p["name"]: {
@@ -2288,36 +1427,24 @@ class TwoLLMContractGame(Component):
                 "ИДЕТ ЭТАП 1: ВСТУПИТЕЛЬНЫЕ ЗАЯВЛЕНИЯ СТОРОН. "
                 "Официально озвучь стартовую позицию своей роли, финансовые рамки и ключевые требования. "
                 "Заяви свой планируемый взнос и начальные параметры. "
-                "Секретарь слушаний зафиксирует все заявленные финансовые обязательства и требования в протоколе."
+                "Обязательства и требования фиксируются из структурированных полей ответа."
             )
 
             prompt += "\n\n" + self._rag_context(speaker, current["profile"], history, 1)
 
-            response = self._invoke_model(current, "Вступление", turn_counter, [
-                SystemMessage(content=system_message),
-                HumanMessage(content=prompt),
-            ])
-
-            raw_text = _extract_text(getattr(response, "content", response))
-            command = _clean_command(raw_text)
-            parsed = self._parse(
-                command=command,
-                speaker=speaker,
-                state=state,
-                levers_config=levers_config,
-                total_cost=total_cost,
-                llm=current.get("llm"),
-                phase_name="Вступление",
-                turn=turn_counter,
+            answer, action = self._structured_turn(
+                current, "Вступление", turn_counter,
+                [SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                state, levers_config, total_cost,
             )
-            action = self._apply_actions(state, parsed, target=None, total_cost=total_cost, levers_config=levers_config)
-
+            command = answer.speech if answer is not None else ""
             history.append({
                 "turn": turn_counter,
                 "phase": 1,
                 "speaker": speaker,
-                "target": None,
+                "target": action.get("target"),
                 "command": command,
+                "structured_response": answer.model_dump() if answer is not None else None,
                 "action": action,
                 "state": copy.deepcopy(state),
             })
@@ -2423,38 +1550,20 @@ class TwoLLMContractGame(Component):
                 "выдвигай встречные требования и ультиматумы к другим участникам. "
                 "НЕ повторяй свои вступительные речи слово в слово — отвечай на реплики оппонентов и развивай компромисс! "
                 "Обращайся к конкретным сторонам через @Имя или прямо в речи. "
-                "Секретарь слушаний зафиксирует все изменения взносов, параметров и требований в протоколе."
+                "Обязательства и требования фиксируются из структурированных полей ответа."
             )
 
             prompt += "\n\n" + self._rag_context(speaker, current["profile"], history, 2)
 
-            response = self._invoke_model(current, "Переговоры", turn_counter, [
-                SystemMessage(content=system_message),
-                HumanMessage(content=prompt),
-            ])
-
-            raw_text = _extract_text(getattr(response, "content", response))
-            command = _clean_command(raw_text)
-            parsed = self._parse(
-                command=command,
-                speaker=speaker,
-                state=state,
-                levers_config=levers_config,
-                total_cost=total_cost,
-                llm=current.get("llm"),
-                phase_name="Торг",
-                turn=turn_counter,
+            answer, action = self._structured_turn(
+                current, "Переговоры", turn_counter,
+                [SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                state, levers_config, total_cost,
             )
-
-            target_player = parsed.get("target") or self._extract_addressed_player(command, speaker, names)
-            if target_player and target_player in name_to_idx:
-                dialogue_pairs.append((speaker, target_player))
-                pending_speaker_idx = name_to_idx[target_player]
-            else:
-                dialogue_pairs.append((speaker, None))
-                pending_speaker_idx = None
-
-            action = self._apply_actions(state, parsed, target=target_player, total_cost=total_cost, levers_config=levers_config)
+            command = answer.speech if answer is not None else ""
+            target_player = action.get("target")
+            dialogue_pairs.append((speaker, target_player))
+            pending_speaker_idx = name_to_idx.get(target_player)
 
             history.append({
                 "turn": turn_counter,
@@ -2462,6 +1571,7 @@ class TwoLLMContractGame(Component):
                 "speaker": speaker,
                 "target": target_player,
                 "command": command,
+                "structured_response": answer.model_dump() if answer is not None else None,
                 "action": action,
                 "state": copy.deepcopy(state),
             })
@@ -2476,15 +1586,6 @@ class TwoLLMContractGame(Component):
 
             if (b_turn + 1) >= min_turns_to_finish:
                 recent_history = history[-num_players:]
-
-                # 1. Все стороны в последнем круге явно подтвердили согласие
-                all_accepted = all(
-                    "ACCEPT" in (h.get("command", "") + " " + h.get("action", {}).get("message", "")).upper()
-                    or "СОГЛАС" in (h.get("command", "") + " " + h.get("action", {}).get("message", "")).upper()
-                    for h in recent_history
-                )
-                if all_accepted and budget_covered:
-                    break
 
                 # 2. Бюджет полностью собран И нет неразрешенных встречных требований
                 if budget_covered and not has_pending_demands:
@@ -2551,32 +1652,20 @@ class TwoLLMContractGame(Component):
 
             prompt += "\n\n" + self._rag_context(speaker, current["profile"], history, 2, retrieve=False)
 
-            response = self._invoke_model(current, "Последний раунд", turn_counter, [
-                SystemMessage(content=system_message),
-                HumanMessage(content=prompt),
-            ])
-
-            raw_text = _extract_text(getattr(response, "content", response))
-            command = _clean_command(raw_text)
-            parsed = self._parse(
-                command=command,
-                speaker=speaker,
-                state=state,
-                levers_config=levers_config,
-                total_cost=total_cost,
-                llm=current.get("llm"),
-                phase_name="Last Call",
-                turn=turn_counter,
+            answer, action = self._structured_turn(
+                current, "Последний раунд", turn_counter,
+                [SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                state, levers_config, total_cost,
             )
-            action = self._apply_actions(state, parsed, target=None, total_cost=total_cost, levers_config=levers_config)
-
+            command = answer.speech if answer is not None else ""
             history.append({
                 "turn": turn_counter,
                 "phase": 2,
                 "is_last_call": True,
                 "speaker": speaker,
-                "target": None,
+                "target": action.get("target"),
                 "command": command,
+                "structured_response": answer.model_dump() if answer is not None else None,
                 "action": action,
                 "state": copy.deepcopy(state),
             })
@@ -2615,50 +1704,35 @@ class TwoLLMContractGame(Component):
                 f"{deficit_info}"
                 "Прими взвешенное решение: если компромисс приемлем, допустимо голосовать ЗА или ВОЗДЕРЖАЛСЯ. "
                 "Не вспоминай эмоциональные споры из диалога — голосуй исключительно по тексту Соглашения и своему чек-листу! "
-                "ВАЖНО: первая строка твоего ответа ОБЯЗАНА быть ровно одной из трёх: "
-                "'РЕШЕНИЕ: ЗА', 'РЕШЕНИЕ: ПРОТИВ' или 'РЕШЕНИЕ: ВОЗДЕРЖАЛСЯ'. "
-                "Нельзя писать оба варианта или менять формат. После РЕШЕНИЕ: — только обоснование. "
+                "Верни структурированный голос в vote, обоснование — в speech. "
                 f"Соглашение принимается большинством голосов (не менее {majority_threshold} из {num_players}). Дефицит бюджета (при наличии) фиксируется в протоколе для покрытия из резервных фондов."
             )
 
             prompt += "\n\n" + self._rag_context(speaker, current["profile"], history, 3, retrieve=False)
 
-            response = self._invoke_model(current, "Голосование", turn_counter, [
-                SystemMessage(content=system_message),
-                HumanMessage(content=prompt),
-            ])
-
-            raw_text = _extract_text(getattr(response, "content", response))
-            command = _clean_command(raw_text)
-            vote_decision, vote_comment = self._parse_vote(command)
-            vote_comment = _clean_speech_message(vote_comment)
-            if not vote_comment or vote_comment == "Подтверждаю свою позицию и ранее заявленные условия участия.":
-                if vote_decision == "ПРОТИВ":
-                    vote_comment = "Ключевые требования и красные линии стороны не были удовлетворены в итоговом соглашении."
-                elif vote_decision == "ЗА":
-                    vote_comment = "Компромиссные условия соглашения приемлемы для скорейшей реализации проекта."
-                else:
-                    vote_comment = "Поддерживаю необходимость проекта, но сохраняю замечания к отдельным обязательствам."
-
-            action = {
-                "type": "VOTE",
-                "vote": vote_decision,
-                "comment": vote_comment,
-                "message": vote_comment,
-            }
+            answer, action = self._structured_turn(
+                current, "Голосование", turn_counter,
+                [SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                state, levers_config, total_cost, voting=True,
+            )
+            command = answer.speech if answer is not None else ""
+            vote_decision = action["vote"]
+            vote_comment = action["comment"]
 
             voting_records.append({
                 "player": speaker,
                 "vote": vote_decision,
                 "comment": vote_comment,
+                "status": action["status"],
             })
 
             history.append({
                 "turn": turn_counter,
                 "phase": 3,
                 "speaker": speaker,
-                "target": None,
+                "target": action.get("target"),
                 "command": command,
+                "structured_response": answer.model_dump() if answer is not None else None,
                 "action": action,
                 "state": copy.deepcopy(state),
             })
@@ -2675,6 +1749,7 @@ class TwoLLMContractGame(Component):
             "votes_for": votes_for,
             "votes_against": votes_against,
             "votes_abstain": votes_abstain,
+            "votes_invalid": sum(v["status"] == "invalid_response" for v in voting_records),
             "majority_threshold": majority_threshold,
             "quorum": num_players,
             "deficit": deficit,

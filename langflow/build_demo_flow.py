@@ -54,7 +54,6 @@ def main(templates_file: Path) -> None:
             "personal_history": json.dumps(player["personal_history"], ensure_ascii=False),
         }))
     nodes.extend([
-        node("OpenAICompatibleModel", "OpenAICompatibleModel-converter", 430, 2250),
         node("TwoLLMContractGame", "TwoLLMContractGame-main", 950, 900),
         node("ReportController", "ReportController-main", 1400, 900),
         copy.deepcopy(old_nodes["ChatOutput"]),
@@ -88,7 +87,6 @@ def main(templates_file: Path) -> None:
             edge(f"PlayerAgent-{index}", "player", orchestrator, "players"),
         ])
     edges.extend([
-        edge("OpenAICompatibleModel-converter", "model_output", orchestrator, "converter_model"),
         edge(orchestrator, "result", "ReportController-main", "game_result"),
         edge("ReportController-main", "result", nodes[-1]["id"], "input_value"),
     ])
