@@ -870,6 +870,9 @@ class ConsequencesModel(Component):
     ]
 
     def _forecast(self) -> dict[str, Any]:
+        if self.game_result.data.get("status", "completed") != "completed":
+            return {"status": "skipped", "herald_prompt": "",
+                    "report": "# Прогноз не рассчитан\n\nИгра не завершена. Смотрите промежуточный отчёт переговоров."}
         # Прогноз дешёвый и детерминированный: считаем на каждый выход, без кэша между запусками.
         return forecast(self.game_result.data)
 

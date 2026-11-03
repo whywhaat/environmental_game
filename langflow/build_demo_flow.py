@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TYPES = ("GameSettings", "PlayerAgent", "OpenAICompatibleModel", "TwoLLMContractGame", "ReportController")
+TYPES = ("GameSettings", "PlayerAgent", "OpenAICompatibleModel", "NegotiationGame", "ReportController")
 
 
 def main(templates_file: Path) -> None:
@@ -54,7 +54,7 @@ def main(templates_file: Path) -> None:
             "personal_history": json.dumps(player["personal_history"], ensure_ascii=False),
         }))
     nodes.extend([
-        node("TwoLLMContractGame", "TwoLLMContractGame-main", 950, 900),
+        node("NegotiationGame", "NegotiationGame-main", 950, 900),
         node("ReportController", "ReportController-main", 1400, 900),
         copy.deepcopy(old_nodes["ChatOutput"]),
     ])
@@ -79,7 +79,7 @@ def main(templates_file: Path) -> None:
                 "data": {"sourceHandle": source_handle, "targetHandle": target_handle},
                 "animated": False, "className": "", "selected": False}
 
-    orchestrator = "TwoLLMContractGame-main"
+    orchestrator = "NegotiationGame-main"
     edges = [edge("GameSettings-config", "settings", orchestrator, "settings")]
     for index in range(5):
         edges.extend([

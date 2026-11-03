@@ -34,7 +34,7 @@
 
 | Область | Где начинать | Особенности |
 | --- | --- | --- |
-| Основная игра в Langflow (игра Влада, ADR-0005) | `langflow/custom_components/my_components/dialog.py`, класс `TwoLLMContractGame`; `langflow/Negotiation_MVP_5_players.json` | Результат содержит `state`, `players`, `voting_summary`, `consensus_reached`; условия протокола принадлежат ролям. |
+| Основная игра в Langflow (игра Влада, ADR-0005) | `negotiation_game/langflow_component.py`, класс `NegotiationGame`; `negotiation_game/schemas.py`, `rules.py`; `langflow/Negotiation_MVP_5_players.json` | Схемы и правила отделены от адаптера Langflow (ADR-0006). Результат содержит `state`, `players`, `voting_summary`, `consensus_reached`; условия протокола принадлежат ролям. |
 | Самостоятельный движок (игра Олега) | `negotiation_mvp/cli.py`, `engine.py`, `core.py`; `example_config.json` | Результат содержит `final_state`, `final_scores`, `votes`, `accepted`; используются ответственные за компоненты сметы. `langflow_bridge.py` — адаптер этого движка. |
 | Модель последствий | `consequences_model/protocol.py`, `model.py`, `state.py`, `catalog.py`, `report.py` | Принимает результат основной игры Langflow, а не результат `negotiation_mvp` (ADR-0005). Расчёт детерминированный, LLM только объясняет результат (ADR-0001). |
 | Flow с последствиями | `consequences_model/build_flow.py`; `langflow/Negotiation_MVP_with_consequences.json` | Добавляет модель последствий и ChatOutput к базовому flow. |
@@ -46,6 +46,16 @@ README описывает оба варианта, но не содержит в
 
 ## Исходники и собранные файлы
 
+- `langflow/custom_components/my_components/dialog.py` — генерируемый файл основной игры.
+  Правьте `negotiation_game/schemas.py`, `rules.py`, `report.py`, `run_store.py` и `langflow_component.py`, затем
+  выполните `python -m negotiation_game.build_component`: команда обновляет компонент
+  и его код в обоих JSON flow, сохраняя настройки и связи. Langflow и API для сборки не нужны.
+  Проверка: `python -m unittest discover -s tests -p 'test_structured_turns.py'`.
+  `run_chat` и вызовы моделей асинхронные: не заменяйте `ainvoke`/`asyncio.sleep`
+  на блокирующие вызовы. Прогресс и частичные отчёты сохраняются в `NEGOTIATION_GAMES_DIR`
+  (по умолчанию `games/` относительно рабочего каталога процесса Langflow).
+  Транспортная проверка на установленном Langflow: `python tests/verify_lf_lifecycle.py`;
+  она открывает временный локальный HTTP-сервер, не вызывает GigaChat и не проверяет генерацию модели.
 - `langflow/custom_components/my_components/ConsequencesModel.py` — генерируемый файл.
   Правьте пакет `consequences_model/`, затем пересобирайте компонент командой
   `python -m consequences_model.build_component` (ADR-0004).

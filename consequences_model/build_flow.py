@@ -20,7 +20,7 @@ from .build_component import COMPONENT_PATH
 LANGFLOW = COMPONENT_PATH.parents[2]
 SOURCE_FLOW_PATH = LANGFLOW / "Negotiation_MVP_5_players.json"
 FLOW_PATH = LANGFLOW / "Negotiation_MVP_with_consequences.json"
-ORCHESTRATOR = "TwoLLMContractGame-main"
+ORCHESTRATOR = "NegotiationGame-main"
 NODE = "ConsequencesModel-main"
 CHAT = "ChatOutput-consequences"
 FLOW_NAME = "Negotiation MVP + модель последствий"

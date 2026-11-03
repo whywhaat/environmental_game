@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from my_components.PlayerModel import PlayerAgent
-from my_components.dialog import TwoLLMContractGame
+from my_components.dialog import NegotiationGame
 from my_components.game_settings import GameSettings
 from my_components.report_controller import ReportController
 
@@ -45,7 +45,7 @@ def main():
         player.personal_history = json.dumps(item["personal_history"], ensure_ascii=False)
         player.model = DummyModel()
         players.append(player.build_player())
-    game = TwoLLMContractGame()
+    game = NegotiationGame()
     game.settings = settings.build_settings()
     game.players = players
     game.converter_model = DummyModel()
