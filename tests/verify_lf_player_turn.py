@@ -8,6 +8,7 @@ import asyncio
 import copy
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from lfx.schema.data import Data
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def wire_turn(voting=False):
@@ -128,7 +130,18 @@ async def verify():
                 assert result["consensus_reached"]
                 assert all(h["structured_response"] for h in result["history"])
                 assert Path(result["files"]["result.json"]).exists()
+                from consequences_model import forecast
+                expected = forecast(result)
+                assert expected["paid"] == 270_000_000
+                assert expected["commissioning_month"] == 36
+                consequences = eval_custom_component_code(
+                    (ROOT / "langflow/custom_components/my_components/ConsequencesModel.py").read_text())()
+                consequences.game_result = Data(data=result)
+                newspaper = consequences.build_newspaper()
+                assert newspaper.text == expected["herald_text"]
+                assert len(newspaper.text.splitlines()) == 1
                 print("REAL_STACK: полный граф оркестратора завершён; все ходы приняты, отчёт сохранён", flush=True)
+                print("REAL_STACK: готовый результат передан модели; газета совпадает с Python API", flush=True)
         finally:
             if previous is None:
                 os.environ.pop("NEGOTIATION_GAMES_DIR", None)

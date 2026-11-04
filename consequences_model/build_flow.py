@@ -27,6 +27,26 @@ FLOW_NAME = "Negotiation MVP + модель последствий"
 FLOW_DESCRIPTION = "Общественные слушания пяти участников и прогноз модели последствий: город N через 10 лет."
 
 
+def build_edge(by_id: dict[str, Any], source_id: str, output: str, target_id: str, field: str) -> dict[str, Any]:
+    """Связь Langflow с кодировкой ручек, общей для игрового flow и стенда последствий."""
+    source_node, target_node = by_id[source_id], by_id[target_id]
+    source_output = next(item for item in source_node["data"]["node"]["outputs"] if item["name"] == output)
+    source_handle = {"dataType": source_node["data"]["type"], "id": source_id, "name": output,
+                     "output_types": source_output["types"]}
+    target_input = target_node["data"]["node"]["template"][field]
+    target_handle = {"fieldName": field, "id": target_id, "inputTypes": target_input["input_types"],
+                     "type": target_input["type"]}
+
+    def encode(data: dict[str, Any]) -> str:
+        return json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace('"', "œ")
+
+    sh, th = encode(source_handle), encode(target_handle)
+    return {"id": f"reactflow__edge-{source_id}{sh}-{target_id}{th}", "source": source_id, "target": target_id,
+            "sourceHandle": sh, "targetHandle": th,
+            "data": {"sourceHandle": source_handle, "targetHandle": target_handle},
+            "animated": False, "className": "", "selected": False}
+
+
 def component_template(code: str) -> dict[str, Any]:
     """Шаблон узла, как его строит сам Langflow; нужен установленный lfx."""
     from lfx.custom.custom_component.component import Component
@@ -50,7 +70,7 @@ def build_flow(source: dict[str, Any], template: dict[str, Any]) -> dict[str, An
     info.update({"lf_version": report["data"]["node"]["lf_version"], "category": "custom_components"})
     info["template"]["_frontend_node_flow_id"] = {"value": NODE, "name": "_frontend_node_flow_id", "type": "str"}
     model.update({"id": NODE, "position": {"x": x, "y": y}})
-    model["data"].update({"id": NODE, "type": "ConsequencesModel", "node": info, "selected_output": "report",
+    model["data"].update({"id": NODE, "type": "ConsequencesModel", "node": info, "selected_output": "newspaper",
                           "display_name": info["display_name"], "description": info["description"]})
 
     chat = copy.deepcopy(by_type["ChatOutput"])
@@ -60,29 +80,10 @@ def build_flow(source: dict[str, Any], template: dict[str, Any]) -> dict[str, An
     nodes.extend([model, chat])
     by_id.update({NODE: model, CHAT: chat})
 
-    def edge(source_id: str, output: str, target_id: str, field: str) -> dict[str, Any]:
-        # Та же кодировка ручек, что в langflow/build_demo_flow.py.
-        source_node, target_node = by_id[source_id], by_id[target_id]
-        source_output = next(item for item in source_node["data"]["node"]["outputs"] if item["name"] == output)
-        source_handle = {"dataType": source_node["data"]["type"], "id": source_id, "name": output,
-                         "output_types": source_output["types"]}
-        target_input = target_node["data"]["node"]["template"][field]
-        target_handle = {"fieldName": field, "id": target_id, "inputTypes": target_input["input_types"],
-                         "type": target_input["type"]}
-
-        def encode(data: dict[str, Any]) -> str:
-            return json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace('"', "œ")
-
-        sh, th = encode(source_handle), encode(target_handle)
-        return {"id": f"reactflow__edge-{source_id}{sh}-{target_id}{th}", "source": source_id, "target": target_id,
-                "sourceHandle": sh, "targetHandle": th,
-                "data": {"sourceHandle": source_handle, "targetHandle": target_handle},
-                "animated": False, "className": "", "selected": False}
-
     # Профили игроков и условия протокола приходят в итоге игры: модели нужна одна связь от оркестратора.
     flow["data"]["edges"].extend([
-        edge(ORCHESTRATOR, "result", NODE, "game_result"),
-        edge(NODE, "report", CHAT, "input_value"),
+        build_edge(by_id, ORCHESTRATOR, "result", NODE, "game_result"),
+        build_edge(by_id, NODE, "newspaper", CHAT, "input_value"),
     ])
     # Свой id, чтобы импорт не перезаписал flow игры, и тот же при каждой пересборке (у flow Влада id нет).
     flow.update({"id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source.get('id') or source['name']}/consequences")),

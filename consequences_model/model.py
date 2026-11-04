@@ -11,7 +11,7 @@ from .catalog import (ADMIN, CITY_PAID_ALL_SHARE, CONDITIONS, DELAY_PARTIAL_RECO
                       WATER)
 from .explain import fired_rules
 from .protocol import Protocol, read_protocol
-from .report import render_herald_prompt, render_report
+from .report import render_herald_prompt, render_herald_text, render_report
 from .state import city_state, fates
 
 
@@ -118,6 +118,17 @@ def simulate(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
 
 def forecast(game_result: dict[str, Any]) -> dict[str, Any]:
     """Прогноз по итогу игры Влада: Data.data оркестратора."""
+    game_status = game_result.get("status", "completed")
+    if game_status != "completed":
+        labels = {"running": "продолжается", "failed": "прервана из-за ошибки", "cancelled": "отменена"}
+        label = labels.get(game_status, "имеет неизвестный статус") if isinstance(game_status, str) else "имеет неизвестный статус"
+        return {
+            "status": "skipped",
+            "game_status": game_status,
+            "herald_text": "Игра не завершена. Итоги последствий появятся после завершения партии.",
+            "report": f"# Прогноз не рассчитан\n\nИгра не завершена: {label}. Смотрите промежуточный отчёт переговоров.",
+            "herald_prompt": "",
+        }
     protocol = read_protocol(game_result)
     run = simulate(protocol)
     facts = run["facts"]
@@ -136,5 +147,6 @@ def forecast(game_result: dict[str, Any]) -> dict[str, Any]:
         "warnings": list(protocol.warnings),
     }
     result["report"] = render_report(result)
+    result["herald_text"] = render_herald_text(result)
     result["herald_prompt"] = render_herald_prompt(result)
     return result

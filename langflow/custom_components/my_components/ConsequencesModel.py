@@ -9,8 +9,10 @@ from dataclasses import dataclass, field
 from typing import Any
 from typing import Any, Callable
 from dataclasses import asdict
+import base64
+from pathlib import Path, PurePosixPath
 from lfx.custom import Component
-from lfx.io import DataInput, Output
+from lfx.io import DataInput, FileInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -97,7 +99,7 @@ OUTCOMES = {
         "rule": "жители и НКО не поддержали протокол: голосовали против или воздержались",
         "description": "Протокол приняли без жителей и экологов: они его не поддержали. Работы идут, но решение "
                        "воспринимается как навязанное: недовольство и протестная активность сохраняются, "
-                       "экологическая тема политизирована (учебник, табл. 5, «Политика»).",
+                       "экологическая тема политизирована.",
     },
     "dolgostroy": {
         "name": "Долгострой",
@@ -111,7 +113,7 @@ OUTCOMES = {
         "rule": "доля холдинга в смете не меньше 70%",
         "description": "Почти все расходы легли на холдинг: цель области переложить затраты на холдинг "
                        "достигнута. Градообразующее предприятие перегружено, растёт давление на рабочие места, "
-                       "зависимость моногорода от одного работодателя усиливается (учебник, табл. 5, «Экономика»).",
+                       "зависимость моногорода от одного работодателя усиливается.",
     },
     "city_paid": {
         "name": "Город заплатил за всех",
@@ -125,22 +127,20 @@ OUTCOMES = {
                 "открытые датчики работают, жители и НКО голосовали за",
         "description": "Очистные введены в срок из протокола, а открытые эко-датчики НКО показывают всем "
                        "состояние реки. Затраты разделены, жители и экологи участвовали в "
-                       "решении, негатив к холдингу снижается. Это решение близко к эталонному "
-                       "(учебник, табл. 7).",
+                       "решении, негатив к холдингу снижается.",
     },
     "closed_data": {
         "name": "Чистая вода, закрытые данные",
         "rule": "открытые датчики не включены в протокол или выполнены не полностью",
         "description": "Очистные работают, но открытых данных о реке нет: эко-датчики не поставлены или "
-                       "работают не полностью, и истинное состояние реки неизвестно (учебник, табл. 4). Жители не "
+                       "работают не полностью, и истинное состояние реки неизвестно. Жители не "
                        "верят отчётам, недоверие держится.",
     },
     "compromise": {
         "name": "Компромисс",
         "rule": "запасной исход для принятого протокола",
-        "description": "Очистные введены, но протокол далёк от эталонного решения: часть условий выполнена не "
-                       "полностью или без поддержки части участников. Ситуация лучше, чем после аварии, но "
-                       "доверие и экология восстановлены лишь отчасти.",
+        "description": "Очистные введены, общий проект состоялся. Разногласия сторон, сроки или полнота "
+                       "исполнения обязательств потребовали компромисса.",
     },
     "each_for_self": {
         "name": "Каждый сам за себя",
@@ -440,13 +440,15 @@ def fates(facts: dict[str, Any], state: dict[str, Any]) -> dict[str, list[dict[s
     """Судьба участников через 10 лет: проверки по целям ролей из методички."""
     year_1, year_10 = state["year_1"]["subsystems"], state["year_10"]["subsystems"]
     shares, credit = facts["shares"], facts["credit"]
+    received_funding_share = sum(shares[role] * PAID_PART[facts["contributions"].get(role, NONE)]
+                                 for role in (REGION, HOLDING))
 
     def check(goal: str, met: bool) -> dict[str, Any]:
         return {"goal": goal, "met": met}
 
     return {
         ADMIN: [check("Финансирование получено от области и холдинга",
-                      shares[REGION] + shares[HOLDING] >= FUNDING_FROM_OTHERS_SHARE),
+                      received_funding_share >= FUNDING_FROM_OTHERS_SHARE),
                 check("Массовых протестов нет", year_10["politics"] != FAILED),
                 check("Вину за аварию не возложили на город", facts["guilt"] != GUILT_ON_CITY)],
         HOLDING: [check("Негатив к холдингу снижен до 60% за год", year_1["media"] == ACHIEVED),
@@ -455,7 +457,7 @@ def fates(facts: dict[str, Any], state: dict[str, Any]) -> dict[str, list[dict[s
                        shares[REGION] <= REGION_LOW_COST_SHARE and TAX_RELIEF not in facts["acting"]),
                  check("Доверие восстановлено: условия для переизбрания губернатора есть",
                        year_10["politics"] == ACHIEVED)],
-        RESIDENTS: [check("Чистая вода", year_10["ecology"] != FAILED),
+        RESIDENTS: [check("Чистая вода", built_by(facts, HORIZON_MONTHS) or water_at(facts, HORIZON_MONTHS)),
                     check("Тарифы заморожены на время работ", TARIFFS in facts["acting"])],
         NGO: [check("Независимый контроль за очистными", facts["monitoring_ok"]),
               check("Участие в контроле: НКО включила открытые датчики в протокол", SENSORS in facts["included"])],
@@ -607,6 +609,23 @@ def render_report(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_herald_text(result: dict[str, Any]) -> str:
+    """Готовая газета одним абзацем: описание исхода и факты партии, без вызова LLM."""
+    outcome, protocol = result["outcome"], result["protocol"]
+    decision = "Протокол принят" if protocol["accepted"] else "Протокол не принят"
+    pledged = sum(protocol["contributions"].values())
+    year_10 = result["state"]["year_10"]["subsystems"]
+    sentences = [
+        f"Вестник города N: через 10 лет после общественных слушаний — исход «{outcome['name']}».",
+        outcome["description"], f"{decision}.",
+        f"Заявленные взносы: {mln(pledged)} из {mln(protocol['total_cost'])}.",
+        f"Фактически внесено: {mln(result['paid'])}.", f"Сроки: {terms(result)}.",
+        "Показатели города: " + "; ".join(f"{name.lower()} — {words[year_10[subsystem]]}"
+                                          for name, subsystem, words in INDICATORS) + ".",
+    ]
+    return " ".join(sentences)
+
+
 def render_herald_prompt(result: dict[str, Any]) -> str:
     outcome, state = result["outcome"], result["state"]
     year_10 = state["year_10"]["subsystems"]
@@ -635,7 +654,9 @@ def render_herald_prompt(result: dict[str, Any]) -> str:
         "- Опирайся только на факты ниже. Не добавляй фактов, событий и чисел, которых нет в списке.",
         "- Не утверждай ущерб здоровью людей или банкротство как установленный факт.",
         "- 150–250 слов, живой газетный стиль, на русском языке.",
-        "- Последней строкой напиши: «Учебная гипотеза модели последствий, не прогноз по реальной реке».",
+        "- Весь ответ напиши одним абзацем, без заголовков, списков, таблиц и переносов строк.",
+        "- Пиши только об итогах игры: без методических пояснений, ссылок на источники, сравнений с эталоном "
+        "и оговорок об учебном прогнозе.",
         "",
         "Факты:",
         *[f"- {fact}" for fact in facts],
@@ -830,6 +851,17 @@ def simulate(protocol: Protocol, excluded: str | None = None) -> dict[str, Any]:
 
 def forecast(game_result: dict[str, Any]) -> dict[str, Any]:
     """Прогноз по итогу игры Влада: Data.data оркестратора."""
+    game_status = game_result.get("status", "completed")
+    if game_status != "completed":
+        labels = {"running": "продолжается", "failed": "прервана из-за ошибки", "cancelled": "отменена"}
+        label = labels.get(game_status, "имеет неизвестный статус") if isinstance(game_status, str) else "имеет неизвестный статус"
+        return {
+            "status": "skipped",
+            "game_status": game_status,
+            "herald_text": "Игра не завершена. Итоги последствий появятся после завершения партии.",
+            "report": f"# Прогноз не рассчитан\n\nИгра не завершена: {label}. Смотрите промежуточный отчёт переговоров.",
+            "herald_prompt": "",
+        }
     protocol = read_protocol(game_result)
     run = simulate(protocol)
     facts = run["facts"]
@@ -848,6 +880,7 @@ def forecast(game_result: dict[str, Any]) -> dict[str, Any]:
         "warnings": list(protocol.warnings),
     }
     result["report"] = render_report(result)
+    result["herald_text"] = render_herald_text(result)
     result["herald_prompt"] = render_herald_prompt(result)
     return result
 
@@ -862,17 +895,36 @@ class ConsequencesModel(Component):
     inputs = [
         DataInput(name="game_result", display_name="Game Result", required=True,
                   info="Выход оркестратора игры: взносы, условия протокола, голоса и профили игроков."),
+        # Одиночные поля поддерживаются и AST-загрузчиком custom-компонентов Langflow.
+        FileInput(name="image_open_river", display_name="Картинка: Открытая река",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
+        FileInput(name="image_nedostroy", display_name="Картинка: Недострой",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
+        FileInput(name="image_without_residents", display_name="Картинка: Решили без жителей",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
+        FileInput(name="image_dolgostroy", display_name="Картинка: Долгострой",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
+        FileInput(name="image_holding_paid", display_name="Картинка: Холдинг заплатил за всех",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
+        FileInput(name="image_city_paid", display_name="Картинка: Город заплатил за всех",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
+        FileInput(name="image_closed_data", display_name="Картинка: Чистая вода, закрытые данные",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
+        FileInput(name="image_compromise", display_name="Картинка: Компромисс",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
+        FileInput(name="image_each_for_self", display_name="Картинка: Каждый сам за себя",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
+        FileInput(name="image_stagnation", display_name="Картинка: Застой",
+                  file_types=["png", "jpg", "jpeg", "webp"], required=False, temp_file=True),
     ]
     outputs = [
         Output(name="forecast", display_name="Прогноз", method="build_forecast"),
         Output(name="report", display_name="Отчёт", method="build_report"),
+        Output(name="newspaper", display_name="Газета", method="build_newspaper"),
         Output(name="herald_prompt", display_name="Промпт «Вестника»", method="build_herald_prompt"),
     ]
 
     def _forecast(self) -> dict[str, Any]:
-        if self.game_result.data.get("status", "completed") != "completed":
-            return {"status": "skipped", "herald_prompt": "",
-                    "report": "# Прогноз не рассчитан\n\nИгра не завершена. Смотрите промежуточный отчёт переговоров."}
         # Прогноз дешёвый и детерминированный: считаем на каждый выход, без кэша между запусками.
         return forecast(self.game_result.data)
 
@@ -881,6 +933,32 @@ class ConsequencesModel(Component):
 
     def build_report(self) -> Message:
         return Message(text=self._forecast()["report"])
+
+    def build_newspaper(self) -> Message:
+        result = self._forecast()
+        if result.get("status") == "skipped":
+            self.status = "Игра не завершена"
+            return Message(text=result["herald_text"], files=[], content_blocks=[])
+        image = getattr(self, "image_" + result["outcome"]["id"], None)
+        files = []
+        blocks = []
+        if image:
+            # FileInput проверяет доступ и разрешает storage key в полный путь.
+            # Браузеру нужен прежний ключ «flow_id/filename», а не путь на сервере.
+            path = PurePosixPath(str(image).replace("\\", "/"))
+            files = [str(PurePosixPath(*path.parts[-2:]))]
+            mime_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+            if path.suffix.lower() not in mime_types:
+                raise ValueError("Иллюстрация должна быть PNG, JPEG или WebP")
+            # AI-сообщения Playground рисуют rich content, а не Message.files.
+            # Группа сохраняет изображение и при сериализации в старый v1 API.
+            # Base64 не зависит от URL сервера и cookie браузера; пиксели не меняются.
+            blocks = [{"type": "group", "title": "Иллюстрация исхода", "contents": [{
+                "type": "image", "base64": base64.b64encode(Path(image).read_bytes()).decode("ascii"),
+                "mime_type": mime_types[path.suffix.lower()],
+            }]}]
+        self.status = "Газета с иллюстрацией" if image else "Газета без иллюстрации: подходящая картинка не загружена"
+        return Message(text=result["herald_text"], files=files, content_blocks=blocks)
 
     def build_herald_prompt(self) -> Message:
         return Message(text=self._forecast()["herald_prompt"])

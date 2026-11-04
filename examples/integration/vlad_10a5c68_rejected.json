@@ -1,0 +1,115 @@
+{
+  "players": [
+    {
+      "id": "city_residents",
+      "name": "Жители",
+      "budget": 0,
+      "money": 0.0
+    },
+    {
+      "id": "regional_government",
+      "name": "Регион",
+      "budget": 90000000,
+      "money": 90000000.0
+    },
+    {
+      "id": "environmental_ngo",
+      "name": "Эко-НКО",
+      "budget": 10000000,
+      "money": 10000000.0
+    },
+    {
+      "id": "city_administration",
+      "name": "Администрация",
+      "budget": 30000000,
+      "money": 30000000.0
+    },
+    {
+      "id": "industrial_holding",
+      "name": "Промкомплекс",
+      "budget": 180000000,
+      "money": 180000000.0
+    }
+  ],
+  "state": {
+    "total_cost": 270000000.0,
+    "players": {
+      "Жители": {
+        "contribution": null,
+        "share": null,
+        "spent_on_levers": 0.0,
+        "max_budget": 0.0
+      },
+      "Регион": {
+        "contribution": 70000000.0,
+        "share": 25.93,
+        "spent_on_levers": 0.0,
+        "max_budget": 90000000.0
+      },
+      "Эко-НКО": {
+        "contribution": null,
+        "share": null,
+        "spent_on_levers": 0.0,
+        "max_budget": 10000000.0
+      },
+      "Администрация": {
+        "contribution": 0.0,
+        "share": 0.0,
+        "spent_on_levers": 20000000.0,
+        "max_budget": 30000000.0
+      },
+      "Промкомплекс": {
+        "contribution": 160000000.0,
+        "share": 59.26,
+        "spent_on_levers": 0.0,
+        "max_budget": 180000000.0
+      }
+    },
+    "levers": {
+      "guilt": "shared",
+      "plant_mode": "100%",
+      "timeline": 36,
+      "tariffs_freeze": true,
+      "tax_relief": false,
+      "open_sensors": false,
+      "protest_moratorium": true,
+      "water_supply": true
+    }
+  },
+  "voting_summary": {
+    "votes_for": 2,
+    "votes_against": 3,
+    "votes_abstain": 0,
+    "majority_threshold": 3,
+    "quorum": 5,
+    "deficit": 40000000.0,
+    "budget_closed": false,
+    "passed": false,
+    "records": [
+      {
+        "player": "Жители",
+        "vote": "ПРОТИВ"
+      },
+      {
+        "player": "Регион",
+        "vote": "ЗА"
+      },
+      {
+        "player": "Эко-НКО",
+        "vote": "ПРОТИВ"
+      },
+      {
+        "player": "Администрация",
+        "vote": "ПРОТИВ"
+      },
+      {
+        "player": "Промкомплекс",
+        "vote": "ЗА"
+      }
+    ]
+  },
+  "consensus_reached": false,
+  "total_money": 230000000.0,
+  "total_cost": 270000000.0,
+  "deficit": 40000000.0
+}

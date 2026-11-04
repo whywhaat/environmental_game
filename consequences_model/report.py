@@ -151,6 +151,23 @@ def render_report(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_herald_text(result: dict[str, Any]) -> str:
+    """Готовая газета одним абзацем: описание исхода и факты партии, без вызова LLM."""
+    outcome, protocol = result["outcome"], result["protocol"]
+    decision = "Протокол принят" if protocol["accepted"] else "Протокол не принят"
+    pledged = sum(protocol["contributions"].values())
+    year_10 = result["state"]["year_10"]["subsystems"]
+    sentences = [
+        f"Вестник города N: через 10 лет после общественных слушаний — исход «{outcome['name']}».",
+        outcome["description"], f"{decision}.",
+        f"Заявленные взносы: {mln(pledged)} из {mln(protocol['total_cost'])}.",
+        f"Фактически внесено: {mln(result['paid'])}.", f"Сроки: {terms(result)}.",
+        "Показатели города: " + "; ".join(f"{name.lower()} — {words[year_10[subsystem]]}"
+                                          for name, subsystem, words in INDICATORS) + ".",
+    ]
+    return " ".join(sentences)
+
+
 def render_herald_prompt(result: dict[str, Any]) -> str:
     outcome, state = result["outcome"], result["state"]
     year_10 = state["year_10"]["subsystems"]
@@ -179,7 +196,9 @@ def render_herald_prompt(result: dict[str, Any]) -> str:
         "- Опирайся только на факты ниже. Не добавляй фактов, событий и чисел, которых нет в списке.",
         "- Не утверждай ущерб здоровью людей или банкротство как установленный факт.",
         "- 150–250 слов, живой газетный стиль, на русском языке.",
-        "- Последней строкой напиши: «Учебная гипотеза модели последствий, не прогноз по реальной реке».",
+        "- Весь ответ напиши одним абзацем, без заголовков, списков, таблиц и переносов строк.",
+        "- Пиши только об итогах игры: без методических пояснений, ссылок на источники, сравнений с эталоном "
+        "и оговорок об учебном прогнозе.",
         "",
         "Факты:",
         *[f"- {fact}" for fact in facts],
