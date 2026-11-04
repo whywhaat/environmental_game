@@ -84,8 +84,8 @@ print(json.dumps(results))
                              "langflow/Consequences_demo.json",
                              "langflow/custom_components/my_components/ConsequencesModel.py"):
                     self.assertIn(name, names)
-                for case_id in ("open_river", "nedostroy", "each_for_self"):
-                    self.assertIn(f"assets/consequences/{case_id}.png", names)
+                for case in json.loads(bundle.read("examples/consequences/manifest.json")):
+                    self.assertIn(f"assets/consequences/{case['id']}.png", names)
                 for name in names:
                     self.assertFalse(set(Path(name).parts) & {"games", ".git", ".env", "__pycache__", "negotiation_mvp"})
                     self.assertNotEqual(Path(name).name, "dialog.py")

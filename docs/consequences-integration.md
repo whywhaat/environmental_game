@@ -91,7 +91,7 @@ python -m consequences_model examples/integration/vlad_10a5c68_rejected.json --j
 
 ### Иллюстрации на своей платформе
 
-В архиве есть три PNG 1536 × 1024: [open_river.png](../assets/consequences/open_river.png), [nedostroy.png](../assets/consequences/nedostroy.png), [each_for_self.png](../assets/consequences/each_for_self.png). Файл соответствует ключу `outcome.id`:
+В архиве есть десять PNG 1536 × 1024 — по одному файлу для каждого из десяти исходов. Имена файлов: `open_river`, `nedostroy`, `without_residents`, `dolgostroy`, `holding_paid`, `city_paid`, `closed_data`, `compromise`, `each_for_self`, `stagnation` с расширением `.png`. Файл соответствует ключу `outcome.id`:
 
 ```python
 if result.get("status") != "skipped":
@@ -108,7 +108,7 @@ if result.get("status") != "skipped":
 Проверено с Langflow/lfx 1.12.5. В [автономном компоненте](../langflow/custom_components/my_components/ConsequencesModel.py) расчёт встроен; установка Python-пакета проекта на сервер не требуется.
 
 1. Для проверки импортируйте [Consequences_demo.json](../langflow/Consequences_demo.json). В Playground отправьте `1`–`10`, название или id исхода.
-2. В компоненте «Модель последствий» загрузите три PNG в поля соответствующих исходов. Файлы из ZIP не становятся файлами хранилища Langflow автоматически.
+2. В компоненте «Модель последствий» загрузите десять PNG в поля соответствующих исходов. Файлы из ZIP не становятся файлами хранилища Langflow автоматически.
 3. Для реальной игры добавьте этот же компонент и соедините `NegotiationGame-main.result` с его входом `game_result`.
 4. Соедините выход `newspaper` («Газета») с `ChatOutput.input_value`. Получится изображение и отдельный читаемый абзац в одном сообщении.
 
