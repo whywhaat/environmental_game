@@ -7,7 +7,7 @@ from lfx.schema.message import Message
 
 class ReportController(Component):
     display_name = "Report Controller"
-    description = "Читаемый итог переговоров и пути к сохранённым файлам."
+    description = "Читаемый итог переговоров."
     icon = "file-text"
     inputs = [
         DataInput(name="game_result", display_name="Game Result", required=True),
@@ -18,10 +18,6 @@ class ReportController(Component):
     def generate_report(self) -> Message:
         payload = self.game_result.data
         text = payload["report"]
-        files = payload.get("files", {})
-        if files:
-            paths = "\n".join(f"- `{name}`: `{path}`" for name, path in files.items())
-            text += "\n\n## Файлы запуска\n\n" + paths
         if getattr(self, "debug_mode", False):
             details = json.dumps(payload.get("debug", {}), ensure_ascii=False, indent=2)
             fence = "```"

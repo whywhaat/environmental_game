@@ -365,6 +365,9 @@ def render_dialogue(history, state, voting_summary, total_cost, levers_config):
             t = h["turn"]
             sp = h["speaker"]
             act = h.get("action", {})
+            if act.get("status") == "invalid_response" or act.get("type") == "SKIPPED":
+                lines.append(f"**[{t}] {sp}:**\n\n> ⚠️ **Ход пропущен:** корректный ответ участника не получен.\n")
+                continue
             msg = act.get("message", "")
             app = act.get("applied", [])
             badge = format_action_badge(app)
@@ -391,6 +394,9 @@ def render_dialogue(history, state, voting_summary, total_cost, levers_config):
                 sp_label = f"**[{t}] {sp}:**"
 
             act = h.get("action", {})
+            if act.get("status") == "invalid_response" or act.get("type") == "SKIPPED":
+                lines.append(f"{sp_label}\n\n> ⚠️ **Ход пропущен:** корректный ответ участника не получен.\n")
+                continue
             msg = act.get("message", "")
             app = act.get("applied", [])
             badge = format_action_badge(app)
@@ -406,7 +412,10 @@ def render_dialogue(history, state, voting_summary, total_cost, levers_config):
             t = h["turn"]
             sp = h["speaker"]
             act = h.get("action", {})
-            vote = act.get("vote") or "ГОЛОС НЕ ПОЛУЧЕН"
+            if act.get("status") == "invalid_response" or not act.get("vote"):
+                lines.append(f"* **[{t}] {sp}:** ⚠️ **ГОЛОС НЕ ПОЛУЧЕН.**\n")
+                continue
+            vote = act["vote"]
             comment = act.get("comment", "")
             icon = "🟢" if vote == "ЗА" else ("🔴" if vote == "ПРОТИВ" else "⚪")
             lines.append(f"* **[{t}] {sp}:** {icon} **VOTE {vote}:** «{comment}»\n")
@@ -421,11 +430,14 @@ def render_dialogue(history, state, voting_summary, total_cost, levers_config):
 
     lines.append("\n---\n## 📜 ИТОГОВЫЙ ПРОТОКОЛ ОБЩЕСТВЕННЫХ СЛУШАНИЙ ГОРОДА N\n")
     if passed:
-        lines.append(
-            f"🎉 **СТАТУС: ПРОТОКОЛ ПРИНЯТ БОЛЬШИНСТВОМ ГОЛОСОВ!**\n"
-            f"* **Итоги голосования:** За: **{votes_for}**, Против: **{votes_against}**, Воздержались: **{votes_abstain}** (Порог большинства: {majority_threshold} из {quorum})\n"
-            f"* **Финансирование:** {format_money(total_money)} из {format_money(total_cost)} ({((total_money/total_cost)*100) if total_cost else 0:.1f}% от целевой суммы)\n"
-        )
+        lines.append("🎉 **СТАТУС: ПРОТОКОЛ ПРИНЯТ БОЛЬШИНСТВОМ ГОЛОСОВ!**\n")
+    else:
+        lines.append("❌ **СТАТУС: ПРОТОКОЛ НЕ ПРИНЯТ!**\n")
+    lines.append(
+        f"* **Итоги голосования:** За: **{votes_for}**, Против: **{votes_against}**, Воздержались: **{votes_abstain}** (Порог большинства: {majority_threshold} из {quorum})\n"
+        f"* **Финансирование:** {format_money(total_money)} из {format_money(total_cost)} ({((total_money/total_cost)*100) if total_cost else 0:.1f}% от целевой суммы)\n"
+    )
+    if passed:
         if deficit > 100_000.0:
             lines.append(
                 f"> ⚠️ **Примечание по финансированию:** Проект принят при наличии остаточного дефицита в размере {format_money(deficit)}. "
@@ -438,10 +450,7 @@ def render_dialogue(history, state, voting_summary, total_cost, levers_config):
         if deficit > 100_000.0:
             reasons.append(f"не закрыт дефицит бюджета проекта ({format_money(deficit)})")
         reason_str = "; ".join(reasons) if reasons else "несогласованность ключевых условий"
-        lines.append(
-            f"❌ **СТАТУС: ПРОТОКОЛ НЕ ПРИНЯТ!** (За: {votes_for}, Против: {votes_against}, Воздержались: {votes_abstain}).\n"
-            f"* **Причина отклонения:** {reason_str}.\n"
-        )
+        lines.append(f"* **Причина отклонения:** {reason_str}.\n")
 
     lines.append("### 1. Согласованный финансовый план:")
     lines.append("| Участник | Согласованный взнос | Доля в проекте |")
