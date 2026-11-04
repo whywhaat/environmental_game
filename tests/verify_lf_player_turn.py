@@ -5,10 +5,12 @@
 """
 
 import asyncio
+import base64
 import copy
 import json
 import os
 import tempfile
+import zlib
 from pathlib import Path
 
 import httpx
@@ -37,10 +39,20 @@ async def verify():
     requests = []
     scripted = []
     validate_reply = False
+    require_context = False
 
     async def handle(request):
         body = json.loads(request.content)
         requests.append(body)
+        system = "\n".join(m["content"] for m in body["messages"] if m["role"] == "system")
+        human = "\n".join(m["content"] for m in body["messages"] if m["role"] == "user")
+        assert "ROLE_SYSTEM_MARKER" in system and "RULE_SYSTEM_MARKER" in system
+        assert "ROLE_SYSTEM_MARKER" not in human and "RULE_SYSTEM_MARKER" not in human
+        if require_context:
+            assert "SCENARIO_FACT" in human
+            assert "ROLE_LIMIT" in human
+            for marker in ("SOURCE_ONLY_", "PRIVATE_METADATA", "<source>", "ОБЯЗАТЕЛЬНЫЙ КОНТЕКСТ"):
+                assert marker not in human, marker
         function = body["tools"][0]["function"]
         assert function["name"] == "PlayerTurn"
         parameters = function["parameters"]
@@ -68,8 +80,16 @@ async def verify():
                    "city_residents", "environmental_ngo"]
             names = ["Администрация", "Промкомплекс", "Регион", "Жители", "Эко-НКО"]
             instance.players = [Data(data=dict(id=pid, name=name, budget=200_000_000,
-                                                prompt="Проверка контракта.", llm=model))
+                                                prompt="ROLE_SYSTEM_MARKER: проверка контракта.", llm=model))
                                 for pid, name in zip(ids, names)]
+            records = [dict(chunk_id="SOURCE_ONLY_shared", area="shared", audience=["admin", "holding", "region", "residents", "ngo"],
+                            text="SCENARIO_FACT: стоимость проекта 270 млн рублей.", verification_status="PRIVATE_METADATA")]
+            for role in ("admin", "holding", "region", "residents", "ngo"):
+                records.append(dict(chunk_id="SOURCE_ONLY_" + role, area="role", audience=[role],
+                                    text="ROLE_LIMIT: соблюдай лимит своей стороны.", authority_note="PRIVATE_METADATA"))
+            raw = "\n".join(json.dumps(record, ensure_ascii=False) for record in records).encode()
+            instance.rag_config = Data(data={"corpus_b64": base64.b64encode(zlib.compress(raw)).decode()})
+            instance.rules_prompt = "RULE_SYSTEM_MARKER: регламент проверки."
             instance.turns = 5
             instance.request_attempts = 1
             instance.request_timeout_seconds = 10
@@ -119,6 +139,7 @@ async def verify():
         print("REAL_STACK: holding и 70% приняты без дополнительного JSON-кодирования", flush=True)
 
         previous = os.environ.get("NEGOTIATION_GAMES_DIR")
+        require_context = True
         try:
             with tempfile.TemporaryDirectory(prefix="ecolog-player-turn-") as directory:
                 os.environ["NEGOTIATION_GAMES_DIR"] = directory
@@ -127,8 +148,10 @@ async def verify():
                 assert result["status"] == "completed", result.get("error")
                 assert result["consensus_reached"]
                 assert all(h["structured_response"] for h in result["history"])
+                assert all(r["core_chunk_ids"] for r in result["rag_retrievals"])
                 assert Path(result["files"]["result.json"]).exists()
                 print("REAL_STACK: полный граф оркестратора завершён; все ходы приняты, отчёт сохранён", flush=True)
+                print("REAL_STACK: роль/регламент в system, факты без метаданных в user, ID источников в аудите", flush=True)
         finally:
             if previous is None:
                 os.environ.pop("NEGOTIATION_GAMES_DIR", None)

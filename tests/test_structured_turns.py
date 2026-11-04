@@ -36,6 +36,10 @@ class Message:
         self.content = content
 
 
+class SystemMessage(Message):
+    type = "system"
+
+
 class Data:
     def __init__(self, data, text=""):
         self.data, self.text = data, text
@@ -53,7 +57,7 @@ def load_component(path=IMPLEMENTATION, postponed_annotations=False):
                     isinstance(t, ast.Name) and t.id in {"inputs", "outputs"} for t in item.targets))]
         nodes.append(node)
     namespace = dict(__name__="structured_turn_test", __package__="negotiation_game", Component=object,
-                     HumanMessage=Message, SystemMessage=Message, AIMessage=Message,
+                     HumanMessage=Message, SystemMessage=SystemMessage, AIMessage=Message,
                      Data=Data, OutputParserException=type("OutputParserException", (ValueError,), {}))
     flags = __future__.annotations.compiler_flag if postponed_annotations else 0
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec",
@@ -260,6 +264,50 @@ class StructuredTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(model.calls), 2)
         self.assertEqual(self.state, before)
         self.assertTrue(all("validation_error" in call for call in self.game._debug_calls))
+
+    def test_skipped_turns_are_service_statuses_without_quoted_speech(self):
+        for phase, last_call in ((1, False), (2, False), (2, True), (3, False)):
+            with self.subTest(phase=phase, last_call=last_call):
+                action = dict(type="VOTE" if phase == 3 else "SKIPPED", status="invalid_response",
+                              vote=None, message="НЕ РЕПЛИКА УЧАСТНИКА", comment="НЕ ОБОСНОВАНИЕ ГОЛОСА")
+                history = [dict(turn=1, speaker=NAMES[0], phase=phase, is_last_call=last_call, action=action)]
+                report = render_dialogue(history, self.state, {}, self.cost, self.conditions)
+                self.assertNotIn("НЕ РЕПЛИКА УЧАСТНИКА", report)
+                self.assertNotIn("НЕ ОБОСНОВАНИЕ ГОЛОСА", report)
+                self.assertNotIn("«", report)
+                self.assertIn("ГОЛОС НЕ ПОЛУЧЕН" if phase == 3 else "> ⚠️ **Ход пропущен:**", report)
+                if last_call:
+                    self.assertIn(f"**[1] {NAMES[0]} (Last Call):**", report)
+
+    def test_public_speech_and_valid_vote_keep_reference_format(self):
+        history = [dict(turn=1, speaker=NAMES[0], phase=2, target=NAMES[1],
+                        action=dict(type="ACTION", status="ok", message="Предлагаю компромисс.", applied=[])),
+                   dict(turn=2, speaker=NAMES[1], phase=3,
+                        action=dict(type="VOTE", status="ok", vote="ПРОТИВ", comment="Условия не согласованы."))]
+        report = render_dialogue(history, self.state, {}, self.cost, self.conditions)
+        self.assertIn(f"**[1] {NAMES[0]} ➔ @{NAMES[1]}:**\n  «Предлагаю компромисс.»", report)
+        self.assertIn("🔴 **VOTE ПРОТИВ:** «Условия не согласованы.»", report)
+
+    def test_final_summary_has_separate_votes_and_funding_for_both_outcomes(self):
+        self.state["players"][NAMES[0]].update(contribution=30_000_000, share=11.11)
+        before = copy.deepcopy(self.state)
+        for passed in (True, False):
+            with self.subTest(passed=passed):
+                summary = dict(passed=passed, votes_for=3 if passed else 2,
+                               votes_against=2 if passed else 3, votes_abstain=0,
+                               quorum=5, majority_threshold=3, deficit=240_000_000)
+                report = render_dialogue([], self.state, summary, self.cost, self.conditions)
+                final = report.split("## 📜 ИТОГОВЫЙ ПРОТОКОЛ", 1)[1]
+                status_line = next(line for line in final.splitlines() if "СТАТУС:" in line)
+                self.assertNotIn("За:", status_line)
+                self.assertEqual(final.count("* **Итоги голосования:**"), 1)
+                self.assertEqual(final.count("* **Финансирование:**"), 1)
+                self.assertIn("**Финансирование:** 30 млн руб. из 270 млн руб. (11.1%", final)
+                self.assertLess(final.index("* **Итоги голосования:**"), final.index("* **Финансирование:**"))
+                self.assertLess(final.index("* **Финансирование:**"), final.index("### 1. Согласованный финансовый план:"))
+                if not passed:
+                    self.assertIn("**Причина отклонения:**", final)
+                self.assertEqual(self.state, before)
 
     async def test_known_names_and_nullable_artifacts_are_accepted_and_audited(self):
         payload = turn(addressed_to="все", vote="null", own_contribution_millions="",
