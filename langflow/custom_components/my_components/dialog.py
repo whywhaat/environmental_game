@@ -2180,8 +2180,7 @@ class NegotiationGame(Component):
             max_turns = max(5, int(settings_data.get("max_rounds") or getattr(self, "turns", 15) or 15))
             self._live_players, self._live_history = players, history
             self._live_state, self._live_cost, self._live_levers = state, total_cost, levers_config
-            self._run_store = RunStore()
-            self._save_progress()
+            # Сохранение запусков на диск отключено.
             async with asyncio.timeout(game_timeout):
                 turn_counter = await self._run_phase1(players, state, history, rules, 0, levers_config, total_cost)
                 turn_counter = await self._run_phase2(players, state, history, rules, turn_counter, max_turns, levers_config, total_cost)
@@ -2189,7 +2188,6 @@ class NegotiationGame(Component):
             result.data["status"] = "completed"
             result.data["error"] = None
             result.data["debug"] = self._debug_data(history, state)
-            self._run_store.save(result.data)
             self.status = "Игра завершена"
             return result
         except asyncio.CancelledError:
