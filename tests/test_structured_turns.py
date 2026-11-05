@@ -161,6 +161,16 @@ class StructuredTurnTests(unittest.IsolatedAsyncioTestCase):
             [Message("Сделай ход")], self.state, self.conditions, self.cost, voting)
         return result, model
 
+    async def test_system_message_is_first_and_unique(self):
+        model = Model()
+        current = {**self.players[0], "llm": model}
+        await self.game._structured_turn(current, "Проверка", 1,
+            [SystemMessage("Инструкция этапа"), Message("Сделай ход")],
+            self.state, self.conditions, self.cost)
+        sent = model.calls[0]
+        self.assertEqual([message.type for message in sent], ["system", "human"])
+        self.assertIn("Инструкция этапа", sent[0].content)
+
     def add_demand(self):
         self.state, _ = self.prepare(turn(demands=[demand()]))
 
