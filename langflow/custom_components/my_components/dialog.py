@@ -1069,6 +1069,7 @@ import asyncio
 import copy
 import json
 import random
+import sys
 import zlib
 from typing import Any
 
@@ -1388,6 +1389,15 @@ class NegotiationGame(Component):
                 errors = (exc.errors(include_url=False, include_context=False, include_input=False)
                           if isinstance(exc, ValidationError) else [{"loc": [], "msg": str(exc)}])
                 self._debug_calls[-1]["validation_errors"] = errors
+                print(json.dumps({
+                    "event": "negotiation_invalid_response",
+                    "phase": phase,
+                    "turn": turn,
+                    "player": current["name"],
+                    "attempt": attempt + 1,
+                    "error_type": type(exc).__name__,
+                    "errors": errors,
+                }, ensure_ascii=False, default=str), file=sys.stderr, flush=True)
                 if attempt == 0:
                     request.append(HumanMessage(content=(
                         "Ответ не применён. Исправь весь PlayerTurn и верни один вызов функции.\n"
