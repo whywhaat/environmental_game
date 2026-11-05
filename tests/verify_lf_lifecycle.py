@@ -117,6 +117,10 @@ async def verify():
             consequences = eval_custom_component_code(consequences_code)()
             consequences.game_result = result
             assert "не завершена" in consequences.build_report().text
+            assert consequences.build_forecast().data["status"] == "skipped"
+            newspaper = consequences.build_newspaper()
+            assert "не завершена" in newspaper.text
+            assert not newspaper.files and not newspaper.content_blocks
             print("REAL_STACK: ReportController отображает ошибку; незавершённая игра не даёт ложный прогноз", flush=True)
     finally:
         if previous is None:

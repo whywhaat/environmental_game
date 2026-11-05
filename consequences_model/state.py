@@ -7,7 +7,7 @@ from typing import Any, Callable
 from .catalog import (ACHIEVED, ADMIN, CITY_PAID_ALL_SHARE, FAILED, FULL, FUNDING_FROM_OTHERS_SHARE,
                       GUILT_CITY_CORRECTION, GUILT_HOLDING_CORRECTION, GUILT_ON_CITY, GUILT_ON_HOLDING, HOLDING,
                       HOLDING_PAID_ALL_SHARE, HORIZON_MONTHS, LATE_WITHOUT_WATER_MONTHS, MEDIA_HOLDING_MIN_SHARE,
-                      MORATORIUM, NGO, NONE, PARTLY, PLANT_MODE, REGION, REGION_LOW_COST_SHARE, RESIDENTS, SENSORS,
+                      MORATORIUM, NGO, NONE, PAID_PART, PARTLY, PLANT_MODE, REGION, REGION_LOW_COST_SHARE, RESIDENTS, SENSORS,
                       TARIFFS, TAX_RELIEF, WATER, WATER_MAX_MONTHS, YEAR_1_MONTH)
 
 RANK = {FAILED: 0, PARTLY: 1, ACHIEVED: 2}
@@ -101,13 +101,15 @@ def fates(facts: dict[str, Any], state: dict[str, Any]) -> dict[str, list[dict[s
     """Судьба участников через 10 лет: проверки по целям ролей из методички."""
     year_1, year_10 = state["year_1"]["subsystems"], state["year_10"]["subsystems"]
     shares, credit = facts["shares"], facts["credit"]
+    received_funding_share = sum(shares[role] * PAID_PART[facts["contributions"].get(role, NONE)]
+                                 for role in (REGION, HOLDING))
 
     def check(goal: str, met: bool) -> dict[str, Any]:
         return {"goal": goal, "met": met}
 
     return {
         ADMIN: [check("Финансирование получено от области и холдинга",
-                      shares[REGION] + shares[HOLDING] >= FUNDING_FROM_OTHERS_SHARE),
+                      received_funding_share >= FUNDING_FROM_OTHERS_SHARE),
                 check("Массовых протестов нет", year_10["politics"] != FAILED),
                 check("Вину за аварию не возложили на город", facts["guilt"] != GUILT_ON_CITY)],
         HOLDING: [check("Негатив к холдингу снижен до 60% за год", year_1["media"] == ACHIEVED),
@@ -116,7 +118,7 @@ def fates(facts: dict[str, Any], state: dict[str, Any]) -> dict[str, list[dict[s
                        shares[REGION] <= REGION_LOW_COST_SHARE and TAX_RELIEF not in facts["acting"]),
                  check("Доверие восстановлено: условия для переизбрания губернатора есть",
                        year_10["politics"] == ACHIEVED)],
-        RESIDENTS: [check("Чистая вода", year_10["ecology"] != FAILED),
+        RESIDENTS: [check("Чистая вода", built_by(facts, HORIZON_MONTHS) or water_at(facts, HORIZON_MONTHS)),
                     check("Тарифы заморожены на время работ", TARIFFS in facts["acting"])],
         NGO: [check("Независимый контроль за очистными", facts["monitoring_ok"]),
               check("Участие в контроле: НКО включила открытые датчики в протокол", SENSORS in facts["included"])],

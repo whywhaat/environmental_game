@@ -1,0 +1,42 @@
+[
+  {
+    "id": "open_river",
+    "name": "Открытая река"
+  },
+  {
+    "id": "nedostroy",
+    "name": "Недострой"
+  },
+  {
+    "id": "without_residents",
+    "name": "Решили без жителей"
+  },
+  {
+    "id": "dolgostroy",
+    "name": "Долгострой"
+  },
+  {
+    "id": "holding_paid",
+    "name": "Холдинг заплатил за всех"
+  },
+  {
+    "id": "city_paid",
+    "name": "Город заплатил за всех"
+  },
+  {
+    "id": "closed_data",
+    "name": "Чистая вода, закрытые данные"
+  },
+  {
+    "id": "compromise",
+    "name": "Компромисс"
+  },
+  {
+    "id": "each_for_self",
+    "name": "Каждый сам за себя"
+  },
+  {
+    "id": "stagnation",
+    "name": "Застой"
+  }
+]

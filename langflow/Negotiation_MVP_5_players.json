@@ -3699,7 +3699,7 @@
                 "required": false,
                 "show": true,
                 "type": "str",
-                "value": "sk-tsar-530bda32b38eb76799866d24ad863e0a613aaa3a"
+                "value": ""
               },
               "embedding_base_url": {
                 "_input_type": "StrInput",
