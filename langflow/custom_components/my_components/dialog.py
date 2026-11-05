@@ -1362,7 +1362,14 @@ class NegotiationGame(Component):
         )
         if rules:
             role += "\nРЕГЛАМЕНТ ЗАСЕДАНИЯ:\n" + rules + "\n"
-        request = [SystemMessage(content=role + "\n" + contract), *messages]
+        system_parts = [role, contract]
+        request = []
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                system_parts.append(message.content)
+            else:
+                request.append(message)
+        request.insert(0, SystemMessage(content="\n".join(system_parts)))
         wrapped = {**current, "llm": structured}
         for attempt in range(2):
             result = await self._invoke_model(wrapped, phase, turn, request)
