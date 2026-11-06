@@ -885,9 +885,7 @@ def render_dialogue(history, state, voting_summary, total_cost, levers_config):
             t = h["turn"]
             sp = h["speaker"]
             act = h.get("action", {})
-            if act.get("status") == "invalid_response" or act.get("type") == "SKIPPED":
-                lines.append(f"**[{t}] {sp}:**\n\n> ⚠️ **Ход пропущен:** корректный ответ участника не получен.\n")
-                continue
+
             msg = act.get("message", "")
             app = act.get("applied", [])
             badge = format_action_badge(app)
@@ -914,9 +912,7 @@ def render_dialogue(history, state, voting_summary, total_cost, levers_config):
                 sp_label = f"**[{t}] {sp}:**"
 
             act = h.get("action", {})
-            if act.get("status") == "invalid_response" or act.get("type") == "SKIPPED":
-                lines.append(f"{sp_label}\n\n> ⚠️ **Ход пропущен:** корректный ответ участника не получен.\n")
-                continue
+ 
             msg = act.get("message", "")
             app = act.get("applied", [])
             badge = format_action_badge(app)
@@ -1374,6 +1370,8 @@ class NegotiationGame(Component):
         wrapped = {**current, "llm": structured}
         for attempt in range(2):
             result = await self._invoke_model(wrapped, phase, turn, request)
+            print(f"result type: {type(result).__module__}.{type(result).__qualname__}",
+                  file=sys.stderr, flush=True)
             arguments = None
             try:
                 arguments = self._player_turn_arguments(result)
@@ -1389,15 +1387,6 @@ class NegotiationGame(Component):
                 errors = (exc.errors(include_url=False, include_context=False, include_input=False)
                           if isinstance(exc, ValidationError) else [{"loc": [], "msg": str(exc)}])
                 self._debug_calls[-1]["validation_errors"] = errors
-                print(json.dumps({
-                    "event": "negotiation_invalid_response",
-                    "phase": phase,
-                    "turn": turn,
-                    "player": current["name"],
-                    "attempt": attempt + 1,
-                    "error_type": type(exc).__name__,
-                    "errors": errors,
-                }, ensure_ascii=False, default=str), file=sys.stderr, flush=True)
                 if attempt == 0:
                     request.append(HumanMessage(content=(
                         "Ответ не применён. Исправь весь PlayerTurn и верни один вызов функции.\n"
@@ -1440,6 +1429,11 @@ class NegotiationGame(Component):
             try:
                 async with asyncio.timeout(timeout):
                     response = await current["llm"].ainvoke(messages)
+                print(json.dumps(
+                    response, ensure_ascii=False,
+                    default=lambda value: value.model_dump(mode="json")
+                    if isinstance(value, BaseModel) else str(value),
+                ), file=sys.stderr, flush=True)
                 raw = response.get("raw") if isinstance(response, dict) else response
                 content = raw.model_dump(mode="json") if isinstance(raw, BaseModel) else getattr(raw, "content", raw)
                 call["response"] = content if isinstance(content, str) else str(content)
