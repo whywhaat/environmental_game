@@ -5,13 +5,8 @@ import json
 from typing import Annotated, Literal
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StrictBool,
-    StrictFloat,
-    StrictInt,
-    StrictStr,
+    BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt,
+    StrictStr, model_validator,
 )
 
 PlayerId = Annotated[StrictStr, Field(min_length=1)]

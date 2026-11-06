@@ -230,3 +230,14 @@ scripts/
 
 # Local negotiation runs
 games/
+
+# Personal uv environment and generated project scaffold
+/.python-version
+/pyproject.toml
+/uv.lock
+/uv.toml
+/requirements.txt
+/src/ecolog_game/
+
+# macOS metadata
+.DS_Store
