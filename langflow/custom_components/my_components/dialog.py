@@ -1028,38 +1028,6 @@ def render_dialogue(history, state, voting_summary, total_cost, levers_config):
     return "\n".join(lines)
 
 
-# --- negotiation_game/run_store.py ---
-
-"""Локальное сохранение прогресса игры после каждого хода и при прерывании."""
-
-import json
-import os
-from datetime import datetime, timezone
-from pathlib import Path
-from uuid import uuid4
-
-
-class RunStore:
-    def __init__(self):
-        self.run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S_") + uuid4().hex[:8]
-        root = Path(os.environ.get("NEGOTIATION_GAMES_DIR", "games")).expanduser().resolve()
-        self.directory = root / self.run_id
-        self.directory.mkdir(parents=True, exist_ok=False)
-        self.files = {"result.json": str(self.directory / "result.json"),
-                      "result.md": str(self.directory / "result.md")}
-
-    def save(self, payload: dict) -> None:
-        payload["run_id"] = self.run_id
-        payload["files"] = dict(self.files)
-        contents = {"result.json": json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-                    "result.md": payload["report"]}
-        for name, content in contents.items():
-            target = self.directory / name
-            temporary = target.with_suffix(target.suffix + ".tmp")
-            temporary.write_text(content + "\n", encoding="utf-8")
-            temporary.replace(target)
-
-
 # --- negotiation_game/langflow_component.py ---
 
 """Адаптер Langflow и оркестрация этапов основной игры переговоров."""
@@ -1446,7 +1414,6 @@ class NegotiationGame(Component):
         for attempt in range(1, max_attempts + 1):
             call["attempt"] = attempt
             self.status = f"{phase}: {current['name']}, ход {turn}, попытка {attempt}"
-            self._save_progress()
             try:
                 async with asyncio.timeout(timeout):
 
@@ -1507,7 +1474,6 @@ class NegotiationGame(Component):
                         "error": f"{err_name}: {exc}",
                         "wait_time": round(wait_time, 2),
                     })
-                    self._save_progress()
                     await asyncio.sleep(wait_time)
                 else:
                     if is_rate_limit:
@@ -1521,29 +1487,6 @@ class NegotiationGame(Component):
                             f"Модель {current['name']} не ответила за {timeout:g} секунд"
                         ) from exc
                     raise
-
-    def _save_progress(self, status="running", error=None):
-        store = getattr(self, "_run_store", None)
-        if store is None:
-            return None
-        state = self._live_state
-        total_cost = self._live_cost
-        history = self._live_history
-        payload = {
-            "status": status, "error": error, "state": copy.deepcopy(state),
-            "history": copy.deepcopy(history), "total_cost": total_cost,
-            "total_money": sum(p.get("contribution") or 0 for p in state["players"].values()),
-            "consensus_reached": None, "voting_summary": None,
-            "progress": str(getattr(self, "status", "")),
-            "players": [{k: v for k, v in p["profile"].items() if k != "llm"}
-                        for p in self._live_players],
-            "rag_retrievals": copy.deepcopy(self._rag_audit),
-            "debug": self._debug_data(history, state),
-            "report": render_partial_report(history, state, total_cost,
-                                             self._live_levers, status, error),
-        }
-        store.save(payload)
-        return Data(data=payload, text=payload["report"])
 
     def _debug_data(self, history: list, state: dict | None) -> dict:
         return {
@@ -1815,6 +1758,7 @@ class NegotiationGame(Component):
                 total_cost=total_cost,
             )
 
+            """
             system_message = (
                 "Ты участник общественных слушаний по экологическому кризису в городе N. "
                 "ИДЕТ ЭТАП 1: ВСТУПИТЕЛЬНЫЕ ЗАЯВЛЕНИЯ СТОРОН. "
@@ -1822,12 +1766,15 @@ class NegotiationGame(Component):
                 "Заяви свой планируемый взнос и начальные параметры. "
                 "Обязательства и требования фиксируются из структурированных полей ответа."
             )
+            """
 
             #prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 1)
 
             answer, action = await self._structured_turn(
                 current, "Вступление", turn_counter,
-                [SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                #[SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                [HumanMessage(content=prompt)],
+
                 state, levers_config, total_cost,
             )
             command = answer.speech if answer is not None else ""
@@ -1841,9 +1788,6 @@ class NegotiationGame(Component):
                 "action": action,
                 "state": copy.deepcopy(state),
             })
-            self._save_progress()
-            # DELETE ME: временная остановка после первого хода для проверки игрока и секретаря.
-            raise RuntimeError("Остановка после первого хода для проверки")
         return turn_counter
 
     async def _run_phase2(self, players: list[dict], state: dict, history: list[dict], rules: str, turn_counter: int, max_turns: int, levers_config: list[dict], total_cost: float) -> int:
@@ -1938,6 +1882,7 @@ class NegotiationGame(Component):
             else:
                 deficit_clause = f"✅ БЮДЖЕТ 100% СОБРАН ({format_money(total_cost)})! Можно переходить к подтверждению сделки."
 
+            """
             system_message = (
                 "Ты участник общественных слушаний по экологическому кризису в городе N. "
                 "ИДЕТ ЭТАП 2: ПЕРЕГОВОРЫ И СОГЛАСОВАНИЕ УСЛОВИЙ. "
@@ -1950,12 +1895,14 @@ class NegotiationGame(Component):
                 "льготы, мораторий и питьевую воду; не выдумывай внешние структуры и источники средств. "
                 "Обязательства и требования фиксируются из структурированных полей ответа."
             )
-
+            """
             #prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 2)
 
             answer, action = await self._structured_turn(
                 current, "Переговоры", turn_counter,
-                [SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                #[SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                [HumanMessage(content=prompt)],
+
                 state, levers_config, total_cost,
             )
             command = answer.speech if answer is not None else ""
@@ -1973,7 +1920,6 @@ class NegotiationGame(Component):
                 "action": action,
                 "state": copy.deepcopy(state),
             })
-            self._save_progress()
 
             # Проверка условий завершения торга и перехода к голосованию (Фаза 3)
             total_c = sum(v["contribution"] for v in state["players"].values() if v.get("contribution") is not None)
@@ -2042,18 +1988,21 @@ class NegotiationGame(Component):
                 available_money=available_money,
             )
 
+            """
             system_message = (
                 "ВНИМАНИЕ! ИДЕТ ФИНАЛЬНЫЙ РАУНД (LAST CALL) ПЕРЕД СОСТАВЛЕНИЕМ СОГЛАШЕНИЯ И ГОЛОСОВАНИЕМ. "
                 f"Текущий реальный дефицит бюджета проекта: {format_money(cur_deficit)}. "
                 "Это твой последний шанс подтвердить или увеличить свой взнос, скорректировать параметры или согласовать компромисс. "
                 "Если ты не можешь увеличить взнос, подтверди свою окончательную позицию."
             )
-
+            """
             #prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 2, retrieve=False)
 
             answer, action = await self._structured_turn(
                 current, "Последний раунд", turn_counter,
-                [SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                #[SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                [HumanMessage(content=prompt)],
+
                 state, levers_config, total_cost,
             )
             command = answer.speech if answer is not None else ""
@@ -2068,7 +2017,6 @@ class NegotiationGame(Component):
                 "action": action,
                 "state": copy.deepcopy(state),
             })
-            self._save_progress()
 
         return turn_counter
 
@@ -2098,6 +2046,8 @@ class NegotiationGame(Component):
             )
 
             deficit_info = f"Текущий статус бюджета проекта: {'⚠️ ДЕФИЦИТ ' + format_money(deficit) if deficit > 100_000.0 else '✅ ПОЛНОСТЬЮ ЗАКРЫТ'}. "
+            
+            """
             system_message = (
                 "ИДЕТ ЭТАП 3: ФИНАЛЬНОЕ ПОИМЕННОЕ ГОЛОСОВАНИЕ ПО ПРОЕКТУ СОГЛАШЕНИЯ. "
                 "Оцени зафиксированный Проект Соглашения строго с точки зрения интересов и красных линий своей роли. "
@@ -2107,12 +2057,15 @@ class NegotiationGame(Component):
                 "Верни структурированный голос в vote, обоснование — в speech. "
                 f"Соглашение принимается большинством голосов (не менее {majority_threshold} из {num_players}). Дефицит бюджета (при наличии) фиксируется в протоколе для покрытия из резервных фондов."
             )
+            """
 
             prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 3, retrieve=False)
 
             answer, action = await self._structured_turn(
                 current, "Голосование", turn_counter,
-                [SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                #[SystemMessage(content=system_message), HumanMessage(content=prompt)],
+                [HumanMessage(content=prompt)],
+
                 state, levers_config, total_cost, voting=True,
             )
             command = answer.speech if answer is not None else ""
@@ -2136,7 +2089,6 @@ class NegotiationGame(Component):
                 "action": action,
                 "state": copy.deepcopy(state),
             })
-            self._save_progress()
 
         votes_for = sum(1 for v in voting_records if v["vote"] == "ЗА")
         votes_against = sum(1 for v in voting_records if v["vote"] == "ПРОТИВ")
@@ -2194,7 +2146,6 @@ class NegotiationGame(Component):
         self._rag_audit = []
         self._debug_calls = []
         self._debug_initial_state = None
-        self._run_store = None
         history = []
         state = None
         try:
@@ -2212,8 +2163,6 @@ class NegotiationGame(Component):
             max_turns = max(5, int(settings_data.get("max_rounds") or getattr(self, "turns", 15) or 15))
             self._live_players, self._live_history = players, history
             self._live_state, self._live_cost, self._live_levers = state, total_cost, levers_config
-            self._run_store = RunStore()
-            self._save_progress()
 
             #логика цикла игры
             async with asyncio.timeout(game_timeout):
@@ -2224,16 +2173,10 @@ class NegotiationGame(Component):
             result.data["status"] = "completed"
             result.data["error"] = None
             result.data["debug"] = self._debug_data(history, state)
-            self._run_store.save(result.data)
             self.status = "Игра завершена"
             return result
         except asyncio.CancelledError:
             # LF отменяет coroutine; не подавляем отмену и не запускаем следующие ходы.
-            # При отмене графа downstream не выполнится, поэтому отчёт сохраняем локально.
-            try:
-                self._save_progress("cancelled", "Выполнение отменено в Langflow")
-            except OSError:
-                pass  # Уже сохранённые ходы остаются на диске; отмена имеет приоритет.
             raise
         except Exception as exc:
             detail = str(exc)
@@ -2241,11 +2184,6 @@ class NegotiationGame(Component):
                 detail = "Истёк общий лимит времени игры"
             error = f"{type(exc).__name__}: {detail}"
             self.status = "Игра прервана: " + type(exc).__name__
-            if self._run_store is not None:
-                try:
-                    return self._save_progress("failed", error)
-                except OSError as save_error:
-                    error += f"; не удалось обновить файлы: {type(save_error).__name__}"
             # Ошибка конфигурации/файловой системы тоже должна дойти до ReportController.
             text = "# Игра прервана\n\n" + error
             return Data(data={"status": "failed", "error": error, "report": text, "files": {},
