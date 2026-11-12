@@ -1076,7 +1076,7 @@ from pydantic import BaseModel, ValidationError
 from langchain_core.exceptions import OutputParserException
 
 from lfx.custom import Component
-from lfx.io import DataInput, IntInput, ModelInput, MultilineInput, Output
+from lfx.io import DataInput, HandleInput, IntInput, MultilineInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -1232,10 +1232,11 @@ class NegotiationGame(Component):
             required=True,
             is_list=True,
         ),
-        ModelInput(
+        HandleInput(
             name="secretary_llm",
             display_name="Модель секретаря",
             info="Переводит свободный ответ игрока в структурированный ход PlayerTurn.",
+            input_types=["LanguageModel"],
             required=False,
         ),
         IntInput(
@@ -1320,8 +1321,12 @@ class NegotiationGame(Component):
                 "root_client": root, "client": root.chat.completions,
                 "root_async_client": async_root, "async_client": async_root.chat.completions})
         secretary_llm = getattr(self, "secretary_llm", None)
+        tool_schema = player_turn_tool_schema(state["player_ids"], voting, levers_config)
+        if secretary_llm is not None:
+            tool_schema["properties"].pop("speech", None)
+            tool_schema["required"] = [name for name in tool_schema.get("required", []) if name != "speech"]
         structured = (secretary_llm or llm).with_structured_output(
-            player_turn_tool_schema(state["player_ids"], voting, levers_config),
+            tool_schema,
             method="function_calling", include_raw=True)
         # Имена владельцев в настройках могут быть полными названиями ролей.
         # Разрешаем их тем же правилом, что использует игровой валидатор.
@@ -1329,7 +1334,7 @@ class NegotiationGame(Component):
             (name for name in state["player_ids"].values() if is_owner(lever.get("owner", ""), name)),
             lever.get("owner"))} for lever in levers_config]
         contract = (
-            "Верни один вызов функции PlayerTurn строго по её схеме. speech — публичная речь без команд. "
+            "Верни один вызов функции PlayerTurn строго по её схеме. "
             "Все ссылки на участников — точные player_id из списка, не имена. "
             "Деньги во входном состоянии — рубли, в ответе — миллионы. "
             "Формат вызова отличается от внутреннего STATE: null в аргументах не нужен. "
@@ -1356,7 +1361,8 @@ class NegotiationGame(Component):
                 [{k: lever.get(k) for k in ("id", "type", "owner", "allowed", "min_value", "max_value")}
                  for lever in contract_levers], ensure_ascii=False)
             + "\nТЕКУЩИЙ ЭТАП: " + ("голосование" if voting else "переговоры, vote=none")
-            + "\n" + player_turn_examples(state["player_ids"], contract_levers, voting, current["name"])
+            + ("\n" + player_turn_examples(state["player_ids"], contract_levers, voting, current["name"])
+               if secretary_llm is None else "")
         )
         rules = str(getattr(self, "rules_prompt", "") or "").strip()
         if secretary_llm is not None:
@@ -1370,7 +1376,7 @@ class NegotiationGame(Component):
             if not player_text:
                 raise ValueError("Игрок вернул пустую публичную речь")
             request = [
-                SystemMessage(content="Ты секретарь заседания. Переведи решение игрока в PlayerTurn. Не придумывай новых решений, сумм, условий или голосов. Если действие не названо, оставь его без изменений. Поле speech обязательно для схемы, но публичная речь будет взята из ответа игрока напрямую."),
+                SystemMessage(content="Ты секретарь заседания. Переведи решение игрока в структурированные действия. Не придумывай новых решений, сумм, условий или голосов. Если действие не названо, оставь его без изменений."),
                 HumanMessage(content=contract),
                 HumanMessage(content="ТЕКУЩЕЕ СОСТОЯНИЕ И ЗАДАНИЕ ИГРОКА:\n" + "\n\n".join(str(message.content) for message in messages)),
                 HumanMessage(content="ОТВЕТ ИГРОКА:\n" + player_text),
@@ -1388,13 +1394,13 @@ class NegotiationGame(Component):
             arguments = None
             try:
                 arguments = self._player_turn_arguments(result)
+                if secretary_llm is not None:
+                    arguments["speech"] = player_text
                 self._debug_calls[-1].update(raw_arguments=copy.deepcopy(arguments), normalization=[])
                 normalized, changes = normalize_player_turn(
                     arguments, state["player_ids"], self._debug_calls[-1]["normalization"], levers_config)
                 self._debug_calls[-1].update(normalized_arguments=copy.deepcopy(normalized), normalization=changes)
                 answer = player_turn_schema().model_validate(normalized)
-                if secretary_llm is not None:
-                    answer = answer.model_copy(update={"speech": player_text})
                 candidate, action = prepare_player_turn(
                     answer, current["name"], state, levers_config, total_cost, voting)
             except (ValidationError, ValueError, OutputParserException) as exc:
@@ -1836,6 +1842,8 @@ class NegotiationGame(Component):
                 "state": copy.deepcopy(state),
             })
             self._save_progress()
+            # DELETE ME: временная остановка после первого хода для проверки игрока и секретаря.
+            raise RuntimeError("Остановка после первого хода для проверки")
         return turn_counter
 
     async def _run_phase2(self, players: list[dict], state: dict, history: list[dict], rules: str, turn_counter: int, max_turns: int, levers_config: list[dict], total_cost: float) -> int:
