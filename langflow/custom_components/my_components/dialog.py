@@ -1076,7 +1076,7 @@ from pydantic import BaseModel, ValidationError
 from langchain_core.exceptions import OutputParserException
 
 from lfx.custom import Component
-from lfx.io import DataInput, IntInput, MultilineInput, Output
+from lfx.io import DataInput, IntInput, ModelInput, MultilineInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -1232,6 +1232,12 @@ class NegotiationGame(Component):
             required=True,
             is_list=True,
         ),
+        ModelInput(
+            name="secretary_llm",
+            display_name="Модель секретаря",
+            info="Переводит свободный ответ игрока в структурированный ход PlayerTurn.",
+            required=False,
+        ),
         IntInput(
             name="turns",
             display_name="Максимум ходов торга (Фаза 2)",
@@ -1313,7 +1319,8 @@ class NegotiationGame(Component):
             llm = llm.model_copy(update={"request_timeout": timeout, "max_retries": 0,
                 "root_client": root, "client": root.chat.completions,
                 "root_async_client": async_root, "async_client": async_root.chat.completions})
-        structured = llm.with_structured_output(
+        secretary_llm = getattr(self, "secretary_llm", None)
+        structured = (secretary_llm or llm).with_structured_output(
             player_turn_tool_schema(state["player_ids"], voting, levers_config),
             method="function_calling", include_raw=True)
         # Имена владельцев в настройках могут быть полными названиями ролей.
@@ -1352,12 +1359,29 @@ class NegotiationGame(Component):
             + "\n" + player_turn_examples(state["player_ids"], contract_levers, voting, current["name"])
         )
         rules = str(getattr(self, "rules_prompt", "") or "").strip()
-        request = [
-            SystemMessage(content=current["prompt"]),
-            *([HumanMessage(content="РЕГЛАМЕНТ ЗАСЕДАНИЯ:\n" + rules)] if rules else []),
-            HumanMessage(content=contract),
-            *(HumanMessage(content=message.content) for message in messages),
-        ]
+        if secretary_llm is not None:
+            player_request = [
+                SystemMessage(content=current["prompt"]),
+                *([HumanMessage(content="РЕГЛАМЕНТ ЗАСЕДАНИЯ:\n" + rules)] if rules else []),
+                *messages,
+            ]
+            player_result = await self._invoke_model(current, phase + ": игрок", turn, player_request)
+            player_text = str(getattr(player_result, "content", player_result)).strip()
+            if not player_text:
+                raise ValueError("Игрок вернул пустую публичную речь")
+            request = [
+                SystemMessage(content="Ты секретарь заседания. Переведи решение игрока в PlayerTurn. Не придумывай новых решений, сумм, условий или голосов. Если действие не названо, оставь его без изменений. Поле speech обязательно для схемы, но публичная речь будет взята из ответа игрока напрямую."),
+                HumanMessage(content=contract),
+                HumanMessage(content="ТЕКУЩЕЕ СОСТОЯНИЕ И ЗАДАНИЕ ИГРОКА:\n" + "\n\n".join(str(message.content) for message in messages)),
+                HumanMessage(content="ОТВЕТ ИГРОКА:\n" + player_text),
+            ]
+        else:
+            request = [
+                SystemMessage(content=current["prompt"]),
+                *([HumanMessage(content="РЕГЛАМЕНТ ЗАСЕДАНИЯ:\n" + rules)] if rules else []),
+                HumanMessage(content=contract),
+                *(HumanMessage(content=message.content) for message in messages),
+            ]
         wrapped = {**current, "llm": structured}
         for attempt in range(2):
             result = await self._invoke_model(wrapped, phase, turn, request)
@@ -1369,6 +1393,8 @@ class NegotiationGame(Component):
                     arguments, state["player_ids"], self._debug_calls[-1]["normalization"], levers_config)
                 self._debug_calls[-1].update(normalized_arguments=copy.deepcopy(normalized), normalization=changes)
                 answer = player_turn_schema().model_validate(normalized)
+                if secretary_llm is not None:
+                    answer = answer.model_copy(update={"speech": player_text})
                 candidate, action = prepare_player_turn(
                     answer, current["name"], state, levers_config, total_cost, voting)
             except (ValidationError, ValueError, OutputParserException) as exc:
@@ -1417,7 +1443,9 @@ class NegotiationGame(Component):
             self._save_progress()
             try:
                 async with asyncio.timeout(timeout):
+
                     response = await current["llm"].ainvoke(messages)
+                    
                 raw = response.get("raw") if isinstance(response, dict) else response
                 content = raw.model_dump(mode="json") if isinstance(raw, BaseModel) else getattr(raw, "content", raw)
                 call["response"] = content if isinstance(content, str) else str(content)
@@ -1915,7 +1943,7 @@ class NegotiationGame(Component):
                 "Обязательства и требования фиксируются из структурированных полей ответа."
             )
 
-            prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 2)
+            #prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 2)
 
             answer, action = await self._structured_turn(
                 current, "Переговоры", turn_counter,
@@ -2013,7 +2041,7 @@ class NegotiationGame(Component):
                 "Если ты не можешь увеличить взнос, подтверди свою окончательную позицию."
             )
 
-            prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 2, retrieve=False)
+            #prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 2, retrieve=False)
 
             answer, action = await self._structured_turn(
                 current, "Последний раунд", turn_counter,
