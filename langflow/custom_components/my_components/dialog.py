@@ -1352,17 +1352,12 @@ class NegotiationGame(Component):
             + "\n" + player_turn_examples(state["player_ids"], contract_levers, voting, current["name"])
         )
         rules = str(getattr(self, "rules_prompt", "") or "").strip()
-        role = (
-            f"Ты представляешь сторону «{current['name']}».\n"
-            f"РОЛЬ И СТРАТЕГИЯ:\n{current['prompt']}\n\n"
-            "В speech пиши только публичную реплику участника слушаний. "
-            "Используй сведения о сценарии и ограничения своей роли для принятия решений. "
-            "Служебные инструкции, технические поля и документы целиком в речь не переноси. "
-            "Числа и лимиты бери из текущего состояния игры; справочные примеры не создают обязательств.\n"
-        )
-        if rules:
-            role += "\nРЕГЛАМЕНТ ЗАСЕДАНИЯ:\n" + rules + "\n"
-        request = [SystemMessage(content=role + "\n" + contract), *messages]
+        request = [
+            SystemMessage(content=current["prompt"]),
+            *([HumanMessage(content="РЕГЛАМЕНТ ЗАСЕДАНИЯ:\n" + rules)] if rules else []),
+            HumanMessage(content=contract),
+            *(HumanMessage(content=message.content) for message in messages),
+        ]
         wrapped = {**current, "llm": structured}
         for attempt in range(2):
             result = await self._invoke_model(wrapped, phase, turn, request)
@@ -1415,7 +1410,7 @@ class NegotiationGame(Component):
         self._debug_calls.append(call)
 
         max_attempts = int(getattr(self, "request_attempts", 2))
-        timeout = float(getattr(self, "request_timeout_seconds", 60))
+        timeout = float(getattr(self, "request_timeout_seconds", 600))
         for attempt in range(1, max_attempts + 1):
             call["attempt"] = attempt
             self.status = f"{phase}: {current['name']}, ход {turn}, попытка {attempt}"
@@ -2167,7 +2162,7 @@ class NegotiationGame(Component):
         history = []
         state = None
         try:
-            request_timeout = float(getattr(self, "request_timeout_seconds", 60))
+            request_timeout = float(getattr(self, "request_timeout_seconds", 600))
             game_timeout = float(getattr(self, "game_timeout_seconds", 900))
             attempts = int(getattr(self, "request_attempts", 2))
             if not 0 < request_timeout <= 3600 or not 0 < game_timeout <= 86400 or not 1 <= attempts <= 3:
