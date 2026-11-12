@@ -1789,7 +1789,7 @@ class NegotiationGame(Component):
                 "Обязательства и требования фиксируются из структурированных полей ответа."
             )
 
-            prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 1)
+            #prompt += "\n\n" + await self._rag_context(speaker, current["profile"], history, 1)
 
             answer, action = await self._structured_turn(
                 current, "Вступление", turn_counter,
@@ -2169,7 +2169,8 @@ class NegotiationGame(Component):
                 raise ValueError("Лимит запроса: 1–3600 секунд; игры: 1–86400 секунд; попыток: 1–3")
             players, names, state, settings_data = self._init_session()
             self._debug_initial_state = copy.deepcopy(state)
-            rules = str(getattr(self, "rules_prompt", "") or "").strip()
+
+            rules = str(getattr(self, "rules_prompt", "") or "").strip() #промпт студента
             total_cost = float(settings_data.get("total_cost", DEFAULT_PROJECT_COST))
             levers_config = settings_data.get("levers") or _get_default_settings()["levers"]
             max_turns = max(5, int(settings_data.get("max_rounds") or getattr(self, "turns", 15) or 15))
@@ -2177,10 +2178,13 @@ class NegotiationGame(Component):
             self._live_state, self._live_cost, self._live_levers = state, total_cost, levers_config
             self._run_store = RunStore()
             self._save_progress()
+
+            #логика цикла игры
             async with asyncio.timeout(game_timeout):
                 turn_counter = await self._run_phase1(players, state, history, rules, 0, levers_config, total_cost)
                 turn_counter = await self._run_phase2(players, state, history, rules, turn_counter, max_turns, levers_config, total_cost)
                 result = await self._run_phase3(players, state, history, turn_counter, levers_config, total_cost)
+
             result.data["status"] = "completed"
             result.data["error"] = None
             result.data["debug"] = self._debug_data(history, state)
