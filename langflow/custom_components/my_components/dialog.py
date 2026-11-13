@@ -679,6 +679,30 @@ def render_state(state: dict, levers_config: list[dict], total_cost: float) -> s
     return "\n".join(lines)
 
 
+def render_current_table(state: dict, levers_config: list[dict], total_cost: float) -> str:
+    """Краткий текущий проект протокола для следующего выступающего."""
+    players = state["players"]
+    collected = sum((p.get("contribution") or 0) for p in players.values())
+    lines = ["ТЕКУЩИЙ ПРОЕКТ ПРОТОКОЛА",
+             f"Собрано {format_money(collected)} из {format_money(total_cost)}; дефицит {format_money(max(0, total_cost - collected))}.",
+             "| Пункт | Текущее состояние | Кто отвечает |",
+             "| --- | --- | --- |"]
+    for name, player in players.items():
+        contribution = player.get("contribution")
+        value = format_money(contribution) if contribution is not None else "не заявлен"
+        lines.append(f"| Взнос: {name} | {value} | {name} |")
+    for lever in levers_config:
+        value = state.get("levers", {}).get(lever["id"], lever.get("default"))
+        shown = "включено" if value is True else "не включено" if value is False else str(value)
+        lines.append(f"| {lever['title']} | {shown} | {lever['owner']} |")
+    pending = [d for d in state.get("demands", []) if d.get("status") == "pending"]
+    lines.append(f"Ожидают ответа требования: {len(pending)}.")
+    for demand in pending:
+        value = format_money(demand["value"]) if demand.get("demand_type") == "pledge" else str(demand.get("value"))
+        lines.append(f"- {demand['from']} → {demand['target']}: {demand.get('title', 'Требование')} — {value}")
+    return "\n".join(lines)
+
+
 def render_draft_treaty(state: dict, levers_config: list[dict], total_cost: float) -> str:
     """Формирует официальный текст Проекта Соглашения для голосования в чистом Markdown."""
     total_c = sum(v["contribution"] for v in state["players"].values() if v.get("contribution") is not None)
@@ -1044,7 +1068,7 @@ from pydantic import BaseModel, ValidationError
 from langchain_core.exceptions import OutputParserException
 
 from lfx.custom import Component
-from lfx.io import DataInput, HandleInput, IntInput, MultilineInput, Output
+from lfx.io import DataInput, HandleInput, IntInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -1219,13 +1243,6 @@ class NegotiationGame(Component):
                  value=900, required=True, advanced=True),
         IntInput(name="request_attempts", display_name="Попыток при сетевой ошибке",
                  value=2, required=True, advanced=True),
-        MultilineInput(
-            name="rules_prompt",
-            display_name="Инструкция регламента слушаний",
-            info="Промпт правил и регламента 3 фаз общественных слушаний.",
-            value="",
-            required=False,
-        ),
         DataInput(
             name="settings",
             display_name="Настройки игры",
@@ -1332,12 +1349,20 @@ class NegotiationGame(Component):
             + ("\n" + player_turn_examples(state["player_ids"], contract_levers, voting, current["name"])
                if secretary_llm is None else "")
         )
-        rules = str(getattr(self, "rules_prompt", "") or "").strip()
+        agenda = (
+            "ПОВЕСТКА ДНЯ ОБЩЕСТВЕННОГО ОБСУЖДЕНИЯ\n"
+            "После техногенной аварии загрязнена река; состояние воды требует исследования. "
+            "Муниципальные очистные сооружения изношены, жителям нужна безопасная питьевая вода. "
+            "Сторонам нужно согласовать финансирование и условия реконструкции, экологический контроль "
+            "и меры по обеспечению водой. После переговоров проект протокола выносится на голосование."
+        )
         if secretary_llm is not None:
             player_request = [
                 SystemMessage(content=current["prompt"]),
-                *([HumanMessage(content="РЕГЛАМЕНТ ЗАСЕДАНИЯ:\n" + rules)] if rules else []),
-                *messages,
+                HumanMessage(content=agenda),
+                HumanMessage(content=render_current_table(state, levers_config, total_cost)),
+                HumanMessage(content="ИСТОРИЯ ПЕРЕГОВОРОВ:\n" + render_history(getattr(self, "_live_history", []))),
+                # *messages,  # Временнo убран блок этапа/профиля из запроса игроку.
             ]
             player_result = await self._invoke_model(current, phase + ": игрок", turn, player_request)
             player_text = str(getattr(player_result, "content", player_result)).strip()
@@ -1352,7 +1377,7 @@ class NegotiationGame(Component):
         else:
             request = [
                 SystemMessage(content=current["prompt"]),
-                *([HumanMessage(content="РЕГЛАМЕНТ ЗАСЕДАНИЯ:\n" + rules)] if rules else []),
+                HumanMessage(content=agenda),
                 HumanMessage(content=contract),
                 *(HumanMessage(content=message.content) for message in messages),
             ]
@@ -2157,7 +2182,7 @@ class NegotiationGame(Component):
             players, names, state, settings_data = self._init_session()
             self._debug_initial_state = copy.deepcopy(state)
 
-            rules = str(getattr(self, "rules_prompt", "") or "").strip() #промпт студента
+            rules = ""
             total_cost = float(settings_data.get("total_cost", DEFAULT_PROJECT_COST))
             levers_config = settings_data.get("levers") or _get_default_settings()["levers"]
             max_turns = max(5, int(settings_data.get("max_rounds") or getattr(self, "turns", 15) or 15))
